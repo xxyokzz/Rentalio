@@ -1,0 +1,1510 @@
+// Rentalio — Prisma schema
+// Baseline diselaraskan dengan:
+//   - Notion "03. Model Data & Database"
+//   - Notion "ADR-001. Kontrak Lifecycle & State Machine" (ACCEPTED 12 Okt 2026)
+//   - Notion "10. Panduan Pengembangan Backend & Database"
+//
+// Konvensi:
+//   - UUID untuk ID internal.
+//   - Timestamp UTC (DateTime Prisma = timestamp(3) UTC).
+//   - Uang: BigInt integer satuan terkecil (IDR rupiah utuh), bukan float.
+//   - Relasi tenant-scoped memakai composite FK (tenant_id, id) agar
+//     relasi lintas tenant ditolak oleh database.
+
+generator client {
+  provider               = "prisma-client"
+  // Output di dalam src/ agar ikut ter-compile oleh tsc package ini,
+  // lalu diekspor sebagai @rentalio/database untuk dipakai apps/api.
+  output                 = "../src/generated/client"
+  runtime                = "nodejs"
+  moduleFormat           = "cjs"
+  generatedFileExtension = "ts"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ============================================================
+// Enum domain (terpisah per lifecycle — jangan dicampur, ADR-001)
+// ============================================================
+
+enum TenantStatus {
+  PENDING_ACTIVATION
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+enum MembershipRole {
+  OWNER
+  MANAGER
+  STAFF
+  CASHIER
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  REVOKED
+}
+
+enum UserStatus {
+  PENDING_VERIFICATION
+  ACTIVE
+  DISABLED
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  RESTRICTED
+  CANCELLED
+  EXPIRED
+}
+
+/// Status tagihan langganan platform (tenant → Rentalio).
+/// `PENDING` → `PAID` hanya lewat callback provider yang lolos verifikasi token;
+/// `EXPIRED` diisi callback atau saat tagihan baru dibuat setelah lewat masa bayar.
+enum SubscriptionInvoiceStatus {
+  PENDING
+  PAID
+  EXPIRED
+  FAILED
+}
+
+enum ReservationStatus {
+  PENDING_APPROVAL
+  CONFIRMED
+  REJECTED
+  CANCELLED
+  EXPIRED
+  CONVERTED_TO_ORDER
+}
+
+enum RentalOrderStatus {
+  CONFIRMED
+  READY_FOR_HANDOVER
+  ACTIVE
+  RETURN_IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  RECORDED
+  VOIDED
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  QRIS
+}
+
+/// Konteks transaksi yang memiliki matriks metode pembayaran sendiri.
+enum PaymentContext {
+  NEW_BOOKING
+  ADD_UNIT
+  EXTENSION
+}
+
+/// Tujuan pesan WhatsApp; tiap tujuan adalah template terpisah.
+enum WhatsAppTemplatePurpose {
+  PAYMENT_INSTRUCTION
+  PAYMENT_CONFIRMATION
+}
+
+enum RefundStatus {
+  REQUESTED
+  APPROVED
+  PROCESSING
+  SUCCEEDED
+  FAILED
+  CANCELLED
+}
+
+enum DepositMovementType {
+  RECEIPT
+  DEDUCTION
+  REFUND
+  REVERSAL
+}
+
+/// Permintaan potongan deposit: diajukan (`deposit.deduct`) lalu diputuskan
+/// terpisah oleh OWNER/MANAGER lain (`deposit.deduct.approve`). Movement baru
+/// dibuat saat APPROVED, sehingga saldo tidak berubah selama PENDING.
+enum DepositDeductionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Jenis jaminan penyewa pada sebuah order. ID card adalah jaminan utama;
+/// jaminan lain bersifat opsional. Jaminan uang tidak memakai tipe ini —
+/// nominalnya direpresentasikan lewat ledger deposit yang sudah ada
+/// (append-only), sehingga tidak ada dua sumber kebenaran untuk uang.
+enum CollateralType {
+  ID_CARD
+  OTHER
+}
+
+/// Status tahanan jaminan: masih dipegang (HELD) atau sudah dikembalikan
+/// (RETURNED). Baris tidak dihapus; riwayat tetap utuh.
+enum CollateralStatus {
+  HELD
+  RETURNED
+}
+
+enum BookingMode {
+  MANUAL
+  AUTOMATIC
+}
+
+enum CatalogPolicy {
+  CHECK_AVAILABILITY
+  SKIP_AVAILABILITY
+}
+
+enum AssetStatus {
+  AVAILABLE
+  RESERVED
+  MAINTENANCE
+  DAMAGED
+  RETIRED
+}
+
+enum AllocationStatus {
+  ACTIVE
+  RELEASED
+}
+
+enum ProductStockMode {
+  QUANTITY
+  INDIVIDUAL_UNITS
+}
+
+/// Permintaan perpanjangan sewa. Pengajuan tidak mengubah periode/alokasi;
+/// periode hanya berubah setelah APPROVED (dan alokasi tambahan berhasil).
+enum ExtensionStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+}
+
+/// Status tugas penyelesaian konflik perpanjangan Opsi B.
+enum ExtensionConflictStatus {
+  OPEN
+  RESOLVED
+}
+
+enum VerificationPurpose {
+  OWNER_SIGNUP_EMAIL_VERIFICATION
+}
+
+enum PlatformAdminStatus {
+  ACTIVE
+  DISABLED
+}
+
+// ============================================================
+// Identitas & auth (global, bukan tenant-scoped)
+// ============================================================
+
+model User {
+  id              String     @id @default(uuid()) @db.Uuid
+  email           String     @unique
+  passwordHash    String?
+  status          UserStatus @default(PENDING_VERIFICATION)
+  emailVerifiedAt DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  ownerName       String?
+  tenantName      String?
+  tenantSlug      String?
+
+  // Bukti persetujuan legal saat registrasi OWNER (dokumen 04): identitas versi
+  // dokumen yang disetujui + waktu penerimaan di server. Nullable agar baris
+  // lama tetap sah; registrasi baru selalu mengisinya.
+  termsConsentVersion   String?
+  privacyConsentVersion String?
+  legalConsentAt        DateTime?
+
+  sessions           AuthSession[]
+  memberships        TenantMembership[]
+  ownedInvitations   TenantMemberInvitation[]     @relation("InvitationCreatedBy")
+  auditLogs          AuditLog[]
+  passwordResets     PasswordResetChallenge[]
+  emailVerifications EmailVerificationChallenge[]
+
+  @@map("users")
+}
+
+/// Identitas global Admin Platform; tidak memiliki relasi ke users atau membership tenant.
+model PlatformAdminUser {
+  id                   String              @id @default(uuid()) @db.Uuid
+  email                String              @unique
+  passwordHash         String
+  status               PlatformAdminStatus @default(ACTIVE)
+  totpSecretEncrypted  String?
+  mfaEnrolledAt        DateTime?
+  lastLoginAt          DateTime?
+  lastTotpStep         BigInt?
+  createdAt            DateTime            @default(now())
+  updatedAt            DateTime            @updatedAt
+
+  roles          PlatformAdminRole[]
+  sessions       PlatformAdminSession[]
+  challenges     PlatformAdminLoginChallenge[]
+  recoveryCodes  PlatformAdminRecoveryCode[]
+  roleAssignmentsMade PlatformAdminRole[] @relation("PlatformRoleAssignedBy")
+
+  @@map("platform_admin_users")
+}
+
+model PlatformRole {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+
+  users       PlatformAdminRole[]
+  permissions PlatformRolePermission[]
+
+  @@map("platform_roles")
+}
+
+model PlatformPermission {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique
+  description String
+  createdAt   DateTime @default(now())
+
+  roles PlatformRolePermission[]
+
+  @@map("platform_permissions")
+}
+
+model PlatformAdminRole {
+  id                 String            @id @default(uuid()) @db.Uuid
+  adminUserId        String            @db.Uuid
+  adminUser          PlatformAdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  roleId             String            @db.Uuid
+  role               PlatformRole      @relation(fields: [roleId], references: [id], onDelete: Restrict)
+  assignedByAdminId  String?           @db.Uuid
+  assignedBy         PlatformAdminUser? @relation("PlatformRoleAssignedBy", fields: [assignedByAdminId], references: [id], onDelete: SetNull)
+  assignedAt         DateTime           @default(now())
+  revokedAt          DateTime?
+
+  @@unique([adminUserId, roleId])
+  @@index([roleId, revokedAt])
+  @@map("platform_admin_roles")
+}
+
+model PlatformRolePermission {
+  id           String            @id @default(uuid()) @db.Uuid
+  roleId       String            @db.Uuid
+  role         PlatformRole      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String            @db.Uuid
+  permission   PlatformPermission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("platform_role_permissions")
+}
+
+model PlatformAdminLoginChallenge {
+  id                          String            @id @default(uuid()) @db.Uuid
+  adminUserId                 String            @db.Uuid
+  adminUser                   PlatformAdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  tokenHash                   String            @unique
+  csrfTokenHash               String
+  expiresAt                   DateTime
+  attemptCount                Int               @default(0)
+  pendingTotpSecretEncrypted  String?
+  setupIssuedAt               DateTime?
+  consumedAt                  DateTime?
+  createdAt                   DateTime          @default(now())
+
+  @@index([adminUserId, createdAt])
+  @@index([expiresAt])
+  @@map("platform_admin_login_challenges")
+}
+
+model PlatformAdminSession {
+  id                    String            @id @default(uuid()) @db.Uuid
+  adminUserId           String            @db.Uuid
+  adminUser             PlatformAdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  tokenHash             String            @unique
+  csrfTokenHash         String
+  idleExpiresAt         DateTime
+  absoluteExpiresAt     DateTime
+  lastSeenAt            DateTime          @default(now())
+  mfaAuthenticatedAt    DateTime
+  reauthenticatedAt     DateTime?
+  revokedAt             DateTime?
+  createdAt             DateTime          @default(now())
+
+  @@index([adminUserId, revokedAt])
+  @@map("platform_admin_sessions")
+}
+
+model PlatformAdminRecoveryCode {
+  id          String            @id @default(uuid()) @db.Uuid
+  adminUserId String            @db.Uuid
+  adminUser   PlatformAdminUser @relation(fields: [adminUserId], references: [id], onDelete: Cascade)
+  codeHash    String
+  usedAt      DateTime?
+  createdAt   DateTime          @default(now())
+
+  @@unique([adminUserId, codeHash])
+  @@index([adminUserId, usedAt])
+  @@map("platform_admin_recovery_codes")
+}
+
+model PlatformAuditEvent {
+  id              String             @id @default(uuid()) @db.Uuid
+  /**
+   * Id admin pelaku. Sengaja TANPA foreign key: tabel ini append-only (trigger
+   * menolak UPDATE/DELETE), sehingga `ON DELETE SET NULL` pada FK akan gagal
+   * dengan exception trigger saat admin dihapus. Menyimpan id tanpa FK membuat
+   * jejak audit tetap utuh meski akun admin kelak dihapus/di-purge.
+   */
+  actorAdminId    String?            @db.Uuid
+  action          String
+  targetType      String?
+  targetId        String?
+  reason          String?
+  outcome         String             @default("SUCCESS")
+  correlationId   String
+  metadata        Json?
+  createdAt       DateTime           @default(now())
+
+  @@index([createdAt, id])
+  @@index([actorAdminId, createdAt])
+  @@index([targetType, targetId, createdAt])
+  @@index([correlationId])
+  @@map("platform_audit_events")
+}
+
+model AuthSession {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @db.Uuid
+  user              User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash         String    @unique // SHA-256 dari token sesi mentah; token tidak pernah disimpan
+  csrfTokenHash     String // SHA-256 token CSRF; CSRF terikat sesi, bukan session ID
+  idleExpiresAt     DateTime
+  absoluteExpiresAt DateTime
+  lastSeenAt        DateTime  @default(now())
+  revokedAt         DateTime?
+  createdAt         DateTime  @default(now())
+
+  @@index([userId])
+  @@map("auth_sessions")
+}
+
+model EmailVerificationChallenge {
+  id            String              @id @default(uuid()) @db.Uuid
+  userId        String              @db.Uuid
+  user          User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email         String // email ternormalisasi (lowercase)
+  purpose       VerificationPurpose
+  otpHash       String // HMAC-SHA256 (pepper server); plaintext tidak pernah disimpan
+  attemptCount  Int                 @default(0)
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  invalidatedAt DateTime?
+  nextResendAt  DateTime
+  createdAt     DateTime            @default(now())
+
+  @@index([email, purpose])
+  @@map("email_verification_challenges")
+}
+
+model PasswordResetChallenge {
+  id            String    @id @default(uuid()) @db.Uuid
+  userId        String    @db.Uuid
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash     String    @unique // hash-only; token acak berentropi tinggi
+  expiresAt     DateTime
+  consumedAt    DateTime?
+  invalidatedAt DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([userId])
+  @@map("password_reset_challenges")
+}
+
+/// Rate limit store berbasis PostgreSQL (keputusan final parameter auth 14 Okt 2026 #13).
+/// Identifier disimpan sebagai HMAC ber-key, bukan IP/email mentah.
+model RateLimitCounter {
+  id          String   @id @default(uuid()) @db.Uuid
+  bucket      String // mis. "auth.signup:ip", "auth.signup:email"
+  identifier  String // HMAC-SHA256 ber-key
+  windowStart DateTime
+  windowEnd   DateTime
+  count       Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  @@unique([bucket, identifier, windowStart])
+  @@index([windowEnd])
+  @@map("rate_limit_counters")
+}
+
+// ============================================================
+// Tenancy
+// ============================================================
+
+model Tenant {
+  id       String       @id @default(uuid()) @db.Uuid
+  slug     String       @unique
+  name     String
+  status   TenantStatus @default(ACTIVE)
+  timezone String       @default("Asia/Jakarta")
+  currency String       @default("IDR")
+
+  // Pengaturan booking & katalog (ADR-001 §8)
+  bookingMode            BookingMode   @default(MANUAL)
+  catalogPolicy          CatalogPolicy @default(CHECK_AVAILABILITY)
+  rentalExtensionEnabled Boolean       @default(false)
+
+  // Kontak publik tenant untuk katalog, portal pesanan, dan instruksi
+  // pembayaran manual (Notion 14 §E). Semua opsional; UI tidak mengarang
+  // nomor rekening/QRIS bila belum diisi owner.
+  whatsappNumber           String?
+  bankTransferInstructions String?
+  qrisImageUrl             String?
+
+  // Trial: 72 jam dari activatedAt (server-side)
+  activatedAt DateTime?
+  trialEndsAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships           TenantMembership[]
+  invitations           TenantMemberInvitation[]
+  domains               TenantDomain[]
+  subscriptions         Subscription[]
+  subscriptionInvoices  SubscriptionInvoice[]
+  plans                 Plan[]
+  customers             Customer[]
+  categories            Category[]
+  products              Product[]
+  assets                Asset[]
+  reservations          Reservation[]
+  orders                RentalOrder[]
+  collaterals           Collateral[]
+  paymentMethodSettings TenantPaymentMethodSetting[]
+  whatsappTemplates     WhatsAppTemplate[]
+  extensions            OrderExtension[]
+  extensionOverrides    ExtensionOverride[]
+  extensionConflicts    ExtensionConflict[]
+  auditLogs             AuditLog[]
+  publicOrderAccess     PublicOrderAccess[]
+  catalogConfigs        CatalogConfigVersion[]
+
+  @@map("tenants")
+}
+
+model TenantMembership {
+  id              String           @id @default(uuid()) @db.Uuid
+  tenantId        String           @db.Uuid
+  tenant          Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId          String           @db.Uuid
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role            MembershipRole
+  status          MembershipStatus @default(ACTIVE)
+  permissions     String[]         @default([])
+  createdByUserId String?          @db.Uuid
+  activatedAt     DateTime?
+  revokedAt       DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  @@unique([tenantId, userId])
+  @@index([userId, status])
+  @@map("tenant_memberships")
+}
+
+model TenantMemberInvitation {
+  id              String         @id @default(uuid()) @db.Uuid
+  tenantId        String         @db.Uuid
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email           String // ternormalisasi
+  role            MembershipRole
+  permissions     String[]       @default([])
+  tokenHash       String         @unique // hanya hash disimpan
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  revokedAt       DateTime?
+  createdByUserId String?        @db.Uuid
+  createdBy       User?          @relation("InvitationCreatedBy", fields: [createdByUserId], references: [id])
+  createdAt       DateTime       @default(now())
+
+  @@unique([tenantId, email])
+  @@index([email])
+  @@map("tenant_member_invitations")
+}
+
+model TenantDomain {
+  id         String    @id @default(uuid()) @db.Uuid
+  tenantId   String    @db.Uuid
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  hostname   String    @unique
+  verifiedAt DateTime?
+  isActive   Boolean   @default(false)
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([tenantId])
+  @@map("tenant_domains")
+}
+
+// ============================================================
+// Subscription SaaS Rentalio (bukan payment pelanggan tenant)
+// ============================================================
+
+model Plan {
+  id          String   @id @default(uuid()) @db.Uuid
+  tenantId    String?  @db.Uuid // NULL = plan platform-wide
+  tenant      Tenant?  @relation(fields: [tenantId], references: [id])
+  code        String
+  name        String
+  // Harga TIDAK di-hard-code di aplikasi; disimpan sebagai data (IDR utuh)
+  priceAmount BigInt   @default(0)
+  currency    String   @default("IDR")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  subscriptions Subscription[]
+
+  @@unique([tenantId, code])
+  @@map("plans")
+}
+
+model Subscription {
+  id             String             @id @default(uuid()) @db.Uuid
+  tenantId       String             @db.Uuid
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  planId         String             @db.Uuid
+  plan           Plan               @relation(fields: [planId], references: [id])
+  status         SubscriptionStatus @default(TRIALING)
+  activatedAt    DateTime?
+  trialEndsAt    DateTime? // activatedAt + 72 jam
+  periodStart    DateTime?
+  periodEnd      DateTime?
+  graceStartedAt DateTime?
+  graceEndsAt    DateTime? // grace 3 hari kalender setelah renewal gagal
+  providerRef    String?
+  cancelledAt    DateTime?
+  expiredAt      DateTime?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  events SubscriptionEvent[]
+
+  @@index([tenantId, status])
+  @@map("subscriptions")
+}
+
+model SubscriptionEvent {
+  id              String       @id @default(uuid()) @db.Uuid
+  tenantId        String       @db.Uuid
+  subscriptionId  String       @db.Uuid
+  subscription    Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  provider        String
+  providerEventId String // unique per provider → replay idempoten
+  eventType       String
+  payloadMeta     Json? // metadata tersanitasi, tanpa rahasia
+  createdAt       DateTime     @default(now())
+
+  @@unique([provider, providerEventId])
+  @@index([subscriptionId])
+  @@map("subscription_events")
+}
+
+/// Tagihan langganan tenant ke Rentalio (QRIS dinamis).
+///
+/// Disimpan sebagai data agar riwayat pembayaran tidak bergantung pada state di
+/// dashboard mana pun. `externalId` adalah referensi internal unik yang
+/// dicetak pada QR/instruksi; `qrPayload` menyimpan string QRIS dinamis
+/// (nominal sudah tertanam) yang ditampilkan saat tagihan dibuat.
+///
+/// Tidak ada callback provider: status `PAID` hanya ditetapkan operator
+/// platform lewat Admin Platform setelah dana terverifikasi. Hanya satu tagihan
+/// PENDING per tenant (partial unique index di migration) supaya klik ganda
+/// tidak membuat dua tagihan aktif.
+model SubscriptionInvoice {
+  id                String                    @id @default(uuid()) @db.Uuid
+  tenantId          String                    @db.Uuid
+  tenant            Tenant                    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  provider          String                    @default("qris")
+  externalId        String                    @unique
+  status            SubscriptionInvoiceStatus @default(PENDING)
+  amount            BigInt
+  currency          String                    @default("IDR")
+  qrPayload         String?
+  expiresAt         DateTime
+  paidAt            DateTime?
+  paidAmount        BigInt?
+  paymentMethod     String?
+  paymentChannel    String?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  /// Pengingat operator: kapan email tahap pertama dikirim (idempoten).
+  operatorNotifiedAt DateTime?
+  /// Pengingat operator: kapan email "mendekati kedaluwarsa" dikirim.
+  expiryNotifiedAt   DateTime?
+
+  @@index([tenantId, status])
+  @@map("subscription_invoices")
+}
+
+// ============================================================
+// Katalog & inventaris
+// ============================================================
+
+model Customer {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  email     String?
+  phone     String?
+  isGuest   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  reservations Reservation[]
+  orders       RentalOrder[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId])
+  @@map("customers")
+}
+
+model Category {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products Product[]
+
+  @@unique([tenantId, id])
+  @@map("categories")
+}
+
+model Product {
+  id          String           @id @default(uuid()) @db.Uuid
+  tenantId    String           @db.Uuid
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  categoryId  String?          @db.Uuid
+  category    Category?        @relation(fields: [tenantId, categoryId], references: [tenantId, id])
+  name        String
+  description String?
+  stockMode   ProductStockMode @default(QUANTITY)
+  // Kapasitas stok kuantitas; untuk INDIVIDUAL_UNITS kapasitas = jumlah asset AVAILABLE
+  capacity    Int              @default(0)
+  isActive    Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  assets           Asset[]
+  rates            Rate[]
+  maintenance      AssetMaintenance[]
+  orderItems       RentalItem[]
+  allocations      ReservationAllocation[]
+  reservationItems ReservationItem[]
+  returnItems      ReturnItem[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, categoryId])
+  @@map("products")
+}
+
+model Asset {
+  id            String      @id @default(uuid()) @db.Uuid
+  tenantId      String      @db.Uuid
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  productId     String      @db.Uuid
+  product       Product     @relation(fields: [tenantId, productId], references: [tenantId, id])
+  code          String // kode unit fisik, unik per tenant
+  status        AssetStatus @default(AVAILABLE)
+  conditionNote String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  maintenance AssetMaintenance[]
+  allocations ReservationAllocation[]
+  returnItems ReturnItem[]
+
+  @@unique([tenantId, code])
+  @@unique([tenantId, id])
+  @@index([tenantId, productId, status])
+  @@map("assets")
+}
+
+model Rate {
+  id             String   @id @default(uuid()) @db.Uuid
+  tenantId       String   @db.Uuid
+  productId      String   @db.Uuid
+  product        Product  @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Cascade)
+  perDayAmount   BigInt // IDR utuh
+  perWeekAmount  BigInt?
+  perMonthAmount BigInt?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([tenantId, productId])
+  @@map("rates")
+}
+
+model AssetMaintenance {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  assetId   String   @db.Uuid
+  asset     Asset    @relation(fields: [tenantId, assetId], references: [tenantId, id], onDelete: Cascade)
+  productId String   @db.Uuid
+  product   Product  @relation(fields: [tenantId, productId], references: [tenantId, id], onDelete: Cascade)
+  startAt   DateTime
+  endAt     DateTime
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, assetId, startAt, endAt])
+  @@map("asset_maintenance")
+}
+
+// ============================================================
+// Reservasi & alokasi (anti double-booking)
+// ============================================================
+
+model Reservation {
+  id            String            @id @default(uuid()) @db.Uuid
+  tenantId      String            @db.Uuid
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerId    String?           @db.Uuid
+  customer      Customer?         @relation(fields: [tenantId, customerId], references: [tenantId, id])
+  status        ReservationStatus @default(PENDING_APPROVAL)
+  bookingMode   BookingMode
+  startAt       DateTime
+  endAt         DateTime
+  holdExpiresAt DateTime? // expiry hold PENDING_APPROVAL bila policy ditetapkan
+  // Bukti persetujuan ketentuan sewa untuk booking tamu (Notion 14 §B).
+  guestTermsVersion    String?
+  guestTermsAcceptedAt DateTime?
+  createdAt            DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  sourceOrder     RentalOrder?            @relation("OrderFromReservation")
+  items           ReservationItem[]
+  allocations     ReservationAllocation[]
+  /// Flag operasional: reservasi terdampak override konflik Opsi B.
+  /// Lifecycle reservasi TIDAK diubah otomatis oleh flag ini.
+  hasOpenConflict Boolean                 @default(false)
+
+  publicAccess PublicOrderAccess[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, status, startAt, endAt])
+  @@map("reservations")
+}
+
+/// Token portal pesanan tamu (Notion 14 §D). Hanya hash token yang disimpan;
+/// token plaintext dikembalikan sekali saat booking dibuat. Beberapa baris per
+/// reservasi boleh ada, tetapi hanya token aktif terbaru yang valid — issuance
+/// baru mencabut token lama pada transaksi yang sama.
+model PublicOrderAccess {
+  id            String      @id @default(uuid()) @db.Uuid
+  tenantId      String      @db.Uuid
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  reservationId String      @db.Uuid
+  reservation   Reservation @relation(fields: [tenantId, reservationId], references: [tenantId, id], onDelete: Cascade)
+  tokenHash     String      @unique
+  expiresAt     DateTime
+  revokedAt     DateTime?
+  createdAt     DateTime    @default(now())
+
+  @@unique([tenantId, id])
+  @@index([tenantId, reservationId])
+  @@map("public_order_access")
+}
+
+model ReservationItem {
+  id            String      @id @default(uuid()) @db.Uuid
+  tenantId      String      @db.Uuid
+  reservationId String      @db.Uuid
+  reservation   Reservation @relation(fields: [tenantId, reservationId], references: [tenantId, id], onDelete: Cascade)
+  productId     String      @db.Uuid
+  product       Product     @relation(fields: [tenantId, productId], references: [tenantId, id])
+  quantity      Int
+  startAt       DateTime
+  endAt         DateTime
+  // Snapshot harga saat transaksi
+  priceSnapshot BigInt      @default(0)
+  currency      String      @default("IDR")
+  createdAt     DateTime    @default(now())
+
+  @@unique([tenantId, id])
+  @@index([tenantId, reservationId])
+  @@map("reservation_items")
+}
+
+/// Alokasi kapasitas. Unit fisik dilindungi exclusion constraint PostgreSQL
+/// (btree_gist + tstzrange '[)') pada SQL migration: dua alokasi ACTIVE
+/// untuk asset yang sama tidak boleh tumpang tindih.
+/// Stok kuantitas dikunci dengan SELECT FOR UPDATE pada baris Product
+/// di dalam transaksi (dibuktikan dengan concurrency test).
+model ReservationAllocation {
+  id            String             @id @default(uuid()) @db.Uuid
+  tenantId      String             @db.Uuid
+  productId     String             @db.Uuid
+  product       Product            @relation(fields: [tenantId, productId], references: [tenantId, id])
+  assetId       String?            @db.Uuid
+  asset         Asset?             @relation(fields: [tenantId, assetId], references: [tenantId, id])
+  reservationId String             @db.Uuid
+  reservation   Reservation        @relation(fields: [tenantId, reservationId], references: [tenantId, id], onDelete: Cascade)
+  quantity      Int                @default(1)
+  startAt       DateTime
+  endAt         DateTime
+  status        AllocationStatus   @default(ACTIVE)
+  releasedAt    DateTime?
+  createdAt     DateTime           @default(now())
+  /// Alokasi periode tambahan milik perpanjangan (bukan reservasi baru).
+  extensionId   String?            @db.Uuid
+  extension     OrderExtension?    @relation(fields: [tenantId, extensionId], references: [tenantId, id])
+  /// Hanya terisi bila alokasi ini bagian dari override konflik Opsi B.
+  /// Baris dengan overrideId != NULL dijaga trigger PostgreSQL sadar-override,
+  /// bukan exclusion constraint (lihat migration 016).
+  overrideId    String?            @db.Uuid
+  override      ExtensionOverride? @relation(fields: [tenantId, overrideId], references: [tenantId, id])
+
+  @@unique([tenantId, id])
+  @@index([tenantId, productId, status, startAt, endAt])
+  @@index([tenantId, assetId, status, startAt, endAt])
+  @@index([tenantId, reservationId])
+  @@index([tenantId, extensionId])
+  @@map("reservation_allocations")
+}
+
+// ============================================================
+// Rental order & lifecycle sewa
+// ============================================================
+
+model RentalOrder {
+  id                  String            @id @default(uuid()) @db.Uuid
+  tenantId            String            @db.Uuid
+  tenant              Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orderNumber         String // immutable, unik per tenant
+  sourceReservationId String?           @db.Uuid // unique komposit → konversi tidak ganda
+  sourceReservation   Reservation?      @relation("OrderFromReservation", fields: [tenantId, sourceReservationId], references: [tenantId, id])
+  customerId          String?           @db.Uuid
+  customer            Customer?         @relation(fields: [tenantId, customerId], references: [tenantId, id])
+  status              RentalOrderStatus @default(CONFIRMED)
+  currency            String            @default("IDR")
+  totalAmount         BigInt            @default(0)
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  items              RentalItem[]
+  payments           Payment[]
+  refunds            Refund[]
+  deposits           Deposit[]
+  deductionRequests  DepositDeductionRequest[]
+  returnRecords      ReturnRecord[]
+  inspections        Inspection[]
+  messageSnapshots   TransactionMessageSnapshot[]
+  extensions         OrderExtension[]
+  extensionOverrides ExtensionOverride[]
+  collaterals        Collateral[]
+  /// Flag order: ada konflik perpanjangan Opsi B yang belum diselesaikan.
+  hasOpenConflict    Boolean                      @default(false)
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, orderNumber])
+  @@unique([tenantId, sourceReservationId])
+  @@index([tenantId, status])
+  @@map("rental_orders")
+}
+
+model RentalItem {
+  id            String      @id @default(uuid()) @db.Uuid
+  tenantId      String      @db.Uuid
+  orderId       String      @db.Uuid
+  order         RentalOrder @relation(fields: [tenantId, orderId], references: [tenantId, id], onDelete: Cascade)
+  productId     String      @db.Uuid
+  product       Product     @relation(fields: [tenantId, productId], references: [tenantId, id])
+  assetId       String?     @db.Uuid
+  quantity      Int
+  startAt       DateTime
+  endAt         DateTime
+  priceSnapshot BigInt      @default(0)
+  currency      String      @default("IDR")
+  createdAt     DateTime    @default(now())
+
+  @@unique([tenantId, id])
+  @@index([tenantId, orderId])
+  @@map("rental_items")
+}
+
+// ============================================================
+// Perpanjangan sewa & override konflik Opsi B (ADR-001 §8)
+// ============================================================
+
+/// Permintaan perpanjangan order. Pengajuan tidak mengubah periode/alokasi;
+/// perubahan hanya terjadi pada APPROVED yang disertai alokasi tambahan.
+model OrderExtension {
+  id                String          @id @default(uuid()) @db.Uuid
+  tenantId          String          @db.Uuid
+  tenant            Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orderId           String          @db.Uuid
+  order             RentalOrder     @relation(fields: [tenantId, orderId], references: [tenantId, id], onDelete: Cascade)
+  status            ExtensionStatus @default(PENDING_APPROVAL)
+  previousEndAt     DateTime
+  requestedEndAt    DateTime
+  /// Snapshot biaya perpanjangan yang dihitung server (IDR utuh).
+  amount            BigInt          @default(0)
+  currency          String          @default("IDR")
+  requestedByUserId String?         @db.Uuid
+  decidedByUserId   String?         @db.Uuid
+  decidedAt         DateTime?
+  decisionReason    String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  override    ExtensionOverride?
+  conflicts   ExtensionConflict[]
+  allocations ReservationAllocation[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, orderId, status])
+  @@map("order_extensions")
+}
+
+/// Keputusan override konflik Opsi B yang disetujui eksplisit. Keberadaan
+/// baris ini + `extension_conflicts` adalah satu-satunya dasar trigger
+/// PostgreSQL mengizinkan overlap; tidak ada pengecualian global.
+model ExtensionOverride {
+  id                 String         @id @default(uuid()) @db.Uuid
+  tenantId           String         @db.Uuid
+  tenant             Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  extensionId        String         @unique @db.Uuid
+  extension          OrderExtension @relation(fields: [tenantId, extensionId], references: [tenantId, id], onDelete: Cascade)
+  orderId            String         @db.Uuid
+  order              RentalOrder    @relation(fields: [tenantId, orderId], references: [tenantId, id], onDelete: Cascade)
+  policy             CatalogPolicy
+  reason             String
+  riskAcknowledgedAt DateTime
+  actorUserId        String?        @db.Uuid
+  previousEndAt      DateTime
+  requestedEndAt     DateTime
+  amountSnapshot     BigInt
+  currency           String         @default("IDR")
+  conflictCount      Int
+  createdAt          DateTime       @default(now())
+
+  allocations ReservationAllocation[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, extensionId])
+  @@index([tenantId, orderId])
+  @@map("extension_overrides")
+}
+
+/// Relasi konflik yang dihitung server: satu baris per alokasi terdampak.
+/// Baris berstatus OPEN sekaligus menjadi tugas operasional penyelesaian
+/// konflik; tidak mengubah lifecycle booking/order yang terdampak.
+model ExtensionConflict {
+  id                       String                  @id @default(uuid()) @db.Uuid
+  tenantId                 String                  @db.Uuid
+  tenant                   Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  extensionId              String                  @db.Uuid
+  extension                OrderExtension          @relation(fields: [tenantId, extensionId], references: [tenantId, id], onDelete: Cascade)
+  orderId                  String                  @db.Uuid
+  conflictingAllocationId  String                  @db.Uuid
+  conflictingReservationId String?                 @db.Uuid
+  conflictingOrderId       String?                 @db.Uuid
+  status                   ExtensionConflictStatus @default(OPEN)
+  /// Snapshot ringkas (periode, unit, pelanggan) untuk tampilan & audit.
+  summary                  Json?
+  /// Jejak penyelesaian tugas operasional (diisi saat status → RESOLVED).
+  resolvedAt               DateTime?
+  resolvedByUserId         String?                 @db.Uuid
+  resolutionNote           String?
+  createdAt                DateTime                @default(now())
+  updatedAt                DateTime                @updatedAt
+
+  @@unique([tenantId, extensionId, conflictingAllocationId])
+  @@index([tenantId, status])
+  @@index([tenantId, orderId, status])
+  @@index([tenantId, conflictingOrderId])
+  @@index([tenantId, conflictingReservationId])
+  @@map("extension_conflicts")
+}
+
+// ============================================================
+// Pengembalian & inspeksi (ADR-001 §5)
+// ============================================================
+
+/// Status proses pengembalian.
+enum ReturnStatus {
+  PENDING // dicatat, belum divalidasi
+  COMPLETED // barang diterima, proses selesai
+  CANCELLED // dibatalkan sebelum selesai
+}
+
+/// Rekaman pengembalian barang dari penyewa.
+/// Satu order bisa memiliki beberapa return record (mis. pengembalian bertahap).
+model ReturnRecord {
+  id               String       @id @default(uuid()) @db.Uuid
+  tenantId         String       @db.Uuid
+  orderId          String       @db.Uuid
+  order            RentalOrder  @relation(fields: [tenantId, orderId], references: [tenantId, id])
+  status           ReturnStatus @default(PENDING)
+  returnedAt       DateTime? // waktu aktual barang diterima
+  receivedByUserId String?      @db.Uuid // staf yang menerima
+  notes            String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  items       ReturnItem[]
+  inspections Inspection[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, orderId])
+  @@map("return_records")
+}
+
+/// Item individual dalam satu return record.
+model ReturnItem {
+  id             String       @id @default(uuid()) @db.Uuid
+  tenantId       String       @db.Uuid
+  returnRecordId String       @db.Uuid
+  returnRecord   ReturnRecord @relation(fields: [tenantId, returnRecordId], references: [tenantId, id], onDelete: Cascade)
+  productId      String       @db.Uuid
+  product        Product      @relation(fields: [tenantId, productId], references: [tenantId, id])
+  assetId        String?      @db.Uuid // populated jika INDIVIDUAL_UNITS
+  asset          Asset?       @relation(fields: [tenantId, assetId], references: [tenantId, id])
+  quantity       Int          @default(1)
+  conditionNote  String? // kondisi barang saat dikembalikan
+  createdAt      DateTime     @default(now())
+
+  @@unique([tenantId, id])
+  @@index([tenantId, returnRecordId])
+  @@map("return_items")
+}
+
+/// Status inspeksi kerusakan pasca-return.
+enum InspectionStatus {
+  DRAFT // sedang diisi
+  SUBMITTED // diajukan, menunggu keputusan
+  APPROVED // keputusan disetujui (denda/tidak)
+  REJECTED // keputusan ditolak (tidak ada kerusakan)
+}
+
+/// Inspeksi kerusakan yang dilakukan staf setelah return.
+/// Satu return bisa memiliki satu inspeksi; satu order langsung bisa juga (tanpa return record).
+model Inspection {
+  id                String           @id @default(uuid()) @db.Uuid
+  tenantId          String           @db.Uuid
+  orderId           String           @db.Uuid
+  order             RentalOrder      @relation(fields: [tenantId, orderId], references: [tenantId, id])
+  returnRecordId    String?          @db.Uuid
+  returnRecord      ReturnRecord?    @relation(fields: [tenantId, returnRecordId], references: [tenantId, id])
+  status            InspectionStatus @default(DRAFT)
+  inspectedByUserId String?          @db.Uuid
+  approvedByUserId  String?          @db.Uuid
+  summary           String? // ringkasan temuan
+  penaltyAmount     BigInt? // nominal denda yang diputuskan (IDR rupiah utuh)
+  currency          String           @default("IDR")
+  inspectedAt       DateTime?
+  submittedAt       DateTime?
+  decidedAt         DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  attachments InspectionAttachment[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, orderId])
+  @@index([tenantId, status])
+  @@map("inspections")
+}
+
+/// Lampiran foto/dokumen untuk inspeksi.
+/// object_key = kunci objek di Cloudflare R2.
+model InspectionAttachment {
+  id            String     @id @default(uuid()) @db.Uuid
+  tenantId      String     @db.Uuid
+  inspectionId  String     @db.Uuid
+  inspection    Inspection @relation(fields: [tenantId, inspectionId], references: [tenantId, id], onDelete: Cascade)
+  objectKey     String // kunci R2 (path di bucket)
+  mimeType      String     @default("image/jpeg")
+  fileSizeBytes Int?
+  altText       String?
+  sortOrder     Int        @default(0)
+  uploadedAt    DateTime   @default(now())
+  createdAt     DateTime   @default(now())
+
+  @@unique([tenantId, id])
+  @@index([tenantId, inspectionId])
+  @@map("inspection_attachments")
+}
+
+model Payment {
+  id             String         @id @default(uuid()) @db.Uuid
+  tenantId       String         @db.Uuid
+  orderId        String         @db.Uuid
+  order          RentalOrder    @relation(fields: [tenantId, orderId], references: [tenantId, id])
+  amount         BigInt // positif
+  currency       String         @default("IDR")
+  method         PaymentMethod
+  context        PaymentContext @default(NEW_BOOKING)
+  status         PaymentStatus  @default(RECORDED)
+  reference      String?
+  voidReason     String?
+  voidedByUserId String?        @db.Uuid
+  voidedAt       DateTime?
+  recordedAt     DateTime       @default(now())
+  createdAt      DateTime       @default(now())
+
+  refunds Refund[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId, orderId])
+  @@map("payments")
+}
+
+/// Matriks metode pembayaran per tenant × konteks × metode.
+/// Baris yang belum ada berarti default aktif (lihat PaymentSettingsService).
+model TenantPaymentMethodSetting {
+  id              String         @id @default(uuid()) @db.Uuid
+  tenantId        String         @db.Uuid
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  context         PaymentContext
+  method          PaymentMethod
+  enabled         Boolean        @default(true)
+  updatedByUserId String?        @db.Uuid
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@unique([tenantId, context, method])
+  @@index([tenantId, context])
+  @@map("tenant_payment_method_settings")
+}
+
+/// Template WhatsApp per tenant × konteks × metode × tujuan pesan.
+/// Satu kombinasi memiliki tepat satu template (unique), sehingga tidak ada
+/// dua default aktif yang ambigu. Body tidak pernah dieksekusi sebagai HTML/JS.
+model WhatsAppTemplate {
+  id                 String                  @id @default(uuid()) @db.Uuid
+  tenantId           String                  @db.Uuid
+  tenant             Tenant                  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  context            PaymentContext
+  paymentMethod      PaymentMethod
+  purpose            WhatsAppTemplatePurpose
+  name               String
+  body               String
+  isActive           Boolean                 @default(true)
+  isSystemDefault    Boolean                 @default(true)
+  defaultTemplateKey String
+  currentVersion     Int                     @default(1)
+  createdByUserId    String?                 @db.Uuid
+  updatedByUserId    String?                 @db.Uuid
+  createdAt          DateTime                @default(now())
+  updatedAt          DateTime                @updatedAt
+
+  versions WhatsAppTemplateVersion[]
+
+  @@unique([tenantId, context, paymentMethod, purpose])
+  @@unique([tenantId, id])
+  @@index([tenantId, context, paymentMethod])
+  @@map("whatsapp_templates")
+}
+
+/// Histori versi template. Baris lama tidak diubah saat template diedit.
+model WhatsAppTemplateVersion {
+  id               String           @id @default(uuid()) @db.Uuid
+  tenantId         String           @db.Uuid
+  templateId       String           @db.Uuid
+  template         WhatsAppTemplate @relation(fields: [tenantId, templateId], references: [tenantId, id], onDelete: Cascade)
+  version          Int
+  bodySnapshot     String
+  metadataSnapshot Json?
+  actorId          String?          @db.Uuid
+  changeReason     String?
+  createdAt        DateTime         @default(now())
+
+  @@unique([tenantId, templateId, version])
+  @@index([tenantId, templateId])
+  @@map("whatsapp_template_versions")
+}
+
+/// Snapshot pesan WhatsApp yang benar-benar disajikan untuk sebuah transaksi.
+/// Body dirender saat pembuatan dan tidak pernah ditimpa, sehingga mengubah
+/// template tidak mengubah pesan yang sudah dipakai. Relasi ke template
+/// sengaja tidak memakai FK: snapshot harus tetap ada meski template dihapus.
+model TransactionMessageSnapshot {
+  id              String                  @id @default(uuid()) @db.Uuid
+  tenantId        String                  @db.Uuid
+  orderId         String                  @db.Uuid
+  order           RentalOrder             @relation(fields: [tenantId, orderId], references: [tenantId, id], onDelete: Cascade)
+  paymentId       String?                 @db.Uuid
+  templateId      String?                 @db.Uuid
+  templateVersion Int?
+  context         PaymentContext
+  paymentMethod   PaymentMethod
+  purpose         WhatsAppTemplatePurpose
+  templateName    String?
+  bodySnapshot    String
+  variables       Json?
+  createdAt       DateTime                @default(now())
+
+  @@unique([tenantId, id])
+  @@index([tenantId, orderId, createdAt])
+  @@index([tenantId, paymentId])
+  @@map("transaction_message_snapshots")
+}
+
+model Refund {
+  id                String       @id @default(uuid()) @db.Uuid
+  tenantId          String       @db.Uuid
+  orderId           String       @db.Uuid
+  order             RentalOrder  @relation(fields: [tenantId, orderId], references: [tenantId, id])
+  paymentId         String       @db.Uuid
+  payment           Payment      @relation(fields: [tenantId, paymentId], references: [tenantId, id])
+  amount            BigInt
+  currency          String       @default("IDR")
+  status            RefundStatus @default(REQUESTED)
+  reason            String?
+  reference         String?
+  requestedByUserId String?      @db.Uuid
+  approvedByUserId  String?      @db.Uuid
+  decisionReason    String?
+  processedByUserId String?      @db.Uuid
+  resultNote        String?
+  requestedAt       DateTime     @default(now())
+  processedAt       DateTime?
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+
+  @@unique([tenantId, id])
+  @@index([tenantId, status])
+  @@index([tenantId, orderId])
+  @@index([tenantId, paymentId])
+  @@map("refunds")
+}
+
+model Deposit {
+  id        String      @id @default(uuid()) @db.Uuid
+  tenantId  String      @db.Uuid
+  orderId   String      @db.Uuid
+  order     RentalOrder @relation(fields: [tenantId, orderId], references: [tenantId, id])
+  currency  String      @default("IDR")
+  createdAt DateTime    @default(now())
+
+  movements         DepositMovement[]
+  deductionRequests DepositDeductionRequest[]
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, orderId])
+  @@map("deposits")
+}
+
+/// Permintaan potongan deposit (approval terpisah dari pengajuan).
+/// Hanya permintaan APPROVED yang memiliki `movementId`.
+model DepositDeductionRequest {
+  id                String                 @id @default(uuid()) @db.Uuid
+  tenantId          String                 @db.Uuid
+  orderId           String                 @db.Uuid
+  order             RentalOrder            @relation(fields: [tenantId, orderId], references: [tenantId, id])
+  depositId         String                 @db.Uuid
+  deposit           Deposit                @relation(fields: [tenantId, depositId], references: [tenantId, id])
+  amount            BigInt
+  currency          String                 @default("IDR")
+  status            DepositDeductionStatus @default(PENDING)
+  reason            String
+  conditionNotes    String?
+  requestedByUserId String                 @db.Uuid
+  approvedByUserId  String?                @db.Uuid
+  decisionReason    String?
+  decidedAt         DateTime?
+  movementId        String?                @db.Uuid
+  movement          DepositMovement?       @relation(fields: [tenantId, movementId], references: [tenantId, id])
+  idempotencyKey    String?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, idempotencyKey])
+  @@unique([tenantId, movementId])
+  @@index([tenantId, orderId, status])
+  @@map("deposit_deduction_requests")
+}
+
+/// Append-only ledger. Saldo = Σ(signed) berdasarkan type.
+/// UPDATE/DELETE diblokir trigger pada SQL migration.
+/// saldo tidak boleh negatif → diverifikasi dengan lock transaksional + test paralel.
+model DepositMovement {
+  id             String              @id @default(uuid()) @db.Uuid
+  tenantId       String              @db.Uuid
+  depositId      String              @db.Uuid
+  deposit        Deposit             @relation(fields: [tenantId, depositId], references: [tenantId, id])
+  type           DepositMovementType
+  amount         BigInt // selalu positif; arah ditentukan type
+  currency       String              @default("IDR")
+  reason         String?
+  reversesId     String?             @db.Uuid // reversal merujuk movement asal
+  method         PaymentMethod?
+  reference      String?
+  actorUserId    String?             @db.Uuid
+  idempotencyKey String?
+  createdAt      DateTime            @default(now())
+
+  deductionRequest DepositDeductionRequest?
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, idempotencyKey])
+  /// Satu movement hanya boleh dibalik sekali (null boleh berulang).
+  @@unique([tenantId, reversesId])
+  @@index([tenantId, depositId])
+  @@map("deposit_movements")
+}
+
+/// Jaminan penyewa pada sebuah order.
+///
+/// Jaminan utama adalah ID card penyewa (tipe ID_CARD, maksimal satu aktif
+/// per order). Jaminan lain (tipe OTHER) bersifat opsional dan bisa berjumlah
+/// banyak. Jaminan uang TIDAK memakai model ini: nominalnya dipegang oleh
+/// ledger deposit yang sudah ada (append-only), sehingga tidak ada dua sumber
+/// kebenaran untuk uang. Model ini bersifat riwayat — baris tidak pernah
+/// dihapus; pengembalian ditandai lewat status RETURNED + returnedAt.
+model Collateral {
+  id        String          @id @default(uuid()) @db.Uuid
+  tenantId  String          @db.Uuid
+  tenant    Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orderId   String          @db.Uuid
+  order     RentalOrder     @relation(fields: [tenantId, orderId], references: [tenantId, id], onDelete: Cascade)
+  type      CollateralType
+  status    CollateralStatus @default(HELD)
+  /// Nama/jenis jaminan, mis. "KTP" untuk ID_CARD atau "SIM C"/"Sertifikat" untuk OTHER.
+  label     String
+  /// Nomor identitas/dokumen (opsional). Disimpan sebagai teks biasa, bukan file.
+  documentNumber String?    @db.Text
+  /// Deskripsi tambahan (opsional).
+  description   String?     @db.Text
+  /// Catatan serah-terima/pengembalian (opsional).
+  notes     String?         @db.Text
+  heldAt    DateTime        @default(now())
+  returnedAt DateTime?
+  actorUserId String?       @db.Uuid // staf yang mencatat penahanan terakhir
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@unique([tenantId, id])
+  @@index([tenantId, orderId])
+  @@index([tenantId, orderId, status])
+  @@map("collaterals")
+}
+
+// ============================================================
+// Audit, idempotency, outbox (append-only, defense-in-depth)
+// ============================================================
+
+enum CatalogConfigStatus {
+  DRAFT // draf privat: hanya pemilik/permission eksplisit
+  PUBLISHED // satu-satunya versi yang boleh dibaca katalog publik
+  ARCHIVED // versi lama setelah publish berikutnya
+}
+
+/// Konfigurasi presentasi katalog tenant (Notion 06 WEB-07).
+/// Menyimpan HANYA presentasi terstruktur (allowlist blok/properti) — data
+/// produk, harga, ketersediaan, booking, pembayaran, dan permission tetap
+/// berasal dari domain Rentalio. Draf privat, publish eksplisit, dan versi lama
+/// tetap tersimpan sehingga pemulihan tidak menimpa histori.
+model CatalogConfigVersion {
+  id                String              @id @default(uuid()) @db.Uuid
+  tenantId          String              @db.Uuid
+  tenant            Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  version           Int
+  status            CatalogConfigStatus @default(DRAFT)
+  schemaVersion     Int                 @default(1)
+  templateKey       String              @default("klasik-hangat")
+  config            Json
+  createdByUserId   String?             @db.Uuid
+  publishedByUserId String?             @db.Uuid
+  publishedAt       DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  // Satu DRAFT dan satu PUBLISHED per tenant ditegakkan partial unique index
+  // di migration (Prisma belum mengekspresikannya di schema).
+  @@unique([tenantId, version])
+  @@unique([tenantId, id])
+  @@index([tenantId, status])
+  @@map("catalog_config_versions")
+}
+
+model AuditLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  tenantId      String?  @db.Uuid
+  tenant        Tenant?  @relation(fields: [tenantId], references: [id])
+  actorUserId   String?  @db.Uuid
+  actor         User?    @relation(fields: [actorUserId], references: [id])
+  action        String // MEMBER_INVITED, OWNER_SIGNUP_STARTED, ...
+  domain        String // auth | membership | billing | booking | ...
+  entityType    String?
+  entityId      String?
+  fromState     String?
+  toState       String?
+  reason        String?
+  correlationId String
+  metadata      Json?
+  createdAt     DateTime @default(now())
+
+  @@index([tenantId, createdAt])
+  @@index([correlationId])
+  @@map("audit_logs")
+}
+
+model IdempotencyRecord {
+  id                 String   @id @default(uuid()) @db.Uuid
+  tenantId           String?  @db.Uuid
+  scope              String // operasi, mis. "create-booking"
+  key                String // Idempotency-Key dari client
+  requestFingerprint String // hash(method+path+body)
+  state              String   @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED | FAILED
+  responseStatus     Int?
+  responseBody       Json?
+  createdAt          DateTime @default(now())
+  expiresAt          DateTime
+
+  @@unique([tenantId, scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_records")
+}
+
+model OutboxEvent {
+  id             String    @id @default(uuid()) @db.Uuid
+  tenantId       String?   @db.Uuid
+  aggregateType  String
+  aggregateId    String
+  eventType      String
+  payload        Json
+  createdAt      DateTime  @default(now())
+  publishedAt    DateTime?
+  nextAttemptAt  DateTime?
+  deadLetteredAt DateTime?
+  retryCount     Int       @default(0)
+  lastError      String?
+
+  @@index([publishedAt, createdAt])
+  @@index([nextAttemptAt, createdAt])
+  @@map("outbox_events")
+}

@@ -1,0 +1,140 @@
+/*
+ * Design tokens Rentalio — arah "graphite & clay".
+ *
+ * Kanvas tulang hangat, permukaan bersih, aksi utama grafit pekat, dan aksen
+ * sekunder terakota. Palet sengaja hampir monokrom agar tidak jatuh ke ungu
+ * atau gradien biru yang generik. Semua komponen memakai variabel di sini;
+ * jangan menulis nilai warna, radius, atau spacing ad hoc per halaman.
+ */
+:root {
+  /* Aplikasi hanya punya tema terang; paksa kontrol native dan scrollbar
+     memakai palet terang meski OS bertema gelap. */
+  color-scheme: light;
+
+  /* Warna — permukaan & teks */
+  --sw-white: #ffffff;
+  --sw-canvas: #f1ede4;
+  --sw-canvas-strong: #e6e0d4;
+  --sw-panel: #fcfaf4;
+  --sw-panel-muted: #f7f3ea;
+  --sw-sidebar: #f8f4ec;
+  --sw-border: #e3dcce;
+  --sw-border-strong: #cfc6b5;
+  --sw-text: #211e19;
+  --sw-text-muted: #5b554b;
+  --sw-text-subtle: #6d6659;
+
+  /* Warna — navigasi & aksi (nama lama dipertahankan agar kompatibel) */
+  --sw-navy-900: #1c1915;
+  --sw-navy-800: #27231e;
+  --sw-navy-700: #322d26;
+  --sw-navy-ink: #121110;
+  --sw-blue-700: #8a4e32;
+  --sw-blue-600: #a85f3c;
+  --sw-blue-500: #bc7a55;
+  --sw-blue-050: #f4e9df;
+  --sw-blue-100: #eadacb;
+
+  /* Aksi utama grafit pekat; aksen sekunder terakota */
+  --sw-accent: #2f2a24;
+  --sw-accent-hover: #211d19;
+  --sw-accent-soft: #ede7dc;
+  --sw-accent-ink: #191512;
+  --sw-clay: #a85f3c;
+  --sw-clay-soft: #f6e7db;
+
+  /* Warna — semantik (selalu disertai label teks/ikon) */
+  --sw-success-text: #33704f;
+  --sw-success-bg: #e9f2ec;
+  --sw-success-border: #c6dcce;
+  --sw-warning-text: #8a5a18;
+  --sw-warning-bg: #fbf0dc;
+  --sw-warning-border: #ecd3a7;
+  --sw-danger-text: #9c3a2c;
+  --sw-danger-bg: #fbe9e4;
+  --sw-danger-border: #efc8be;
+  --sw-info-text: #44564f;
+  --sw-info-bg: #eaf0ec;
+  --sw-info-border: #cedad4;
+  --sw-neutral-text: #57534a;
+  --sw-neutral-bg: #f0ebe1;
+  --sw-neutral-border: #ddd5c6;
+
+  /* Tipografi — Inter untuk seluruh antarmuka: x-height tinggi, angka tabular,
+     dan bentuk huruf yang jelas pada ukuran kecil. */
+  --sw-font-sans: "Inter Variable", "Inter", "Segoe UI", system-ui, -apple-system,
+    "Helvetica Neue", Arial, sans-serif;
+  --sw-font-display: "Instrument Serif", "Iowan Old Style", Georgia, "Times New Roman",
+    serif;
+  --sw-font-mono: "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo,
+    Consolas, monospace;
+  --sw-text-xs: 0.8125rem;
+  --sw-text-sm: 0.875rem;
+  --sw-text-base: 0.9375rem;
+  --sw-text-md: 1rem;
+  --sw-text-lg: 1.1875rem;
+  --sw-text-xl: 1.6875rem;
+  --sw-text-2xl: 2.0625rem;
+  --sw-text-3xl: 2.5625rem;
+  --sw-leading-tight: 1.2;
+  --sw-leading-normal: 1.55;
+  --sw-leading-relaxed: 1.7;
+  --sw-weight-regular: 400;
+  --sw-weight-medium: 500;
+  --sw-weight-semibold: 600;
+  --sw-weight-bold: 700;
+
+  /* Spacing (skala 4pt) */
+  --sw-space-1: 0.25rem;
+  --sw-space-2: 0.5rem;
+  --sw-space-3: 0.75rem;
+  --sw-space-4: 1rem;
+  --sw-space-5: 1.25rem;
+  --sw-space-6: 1.5rem;
+  --sw-space-8: 2rem;
+  --sw-space-10: 2.5rem;
+  --sw-space-12: 3rem;
+  --sw-space-16: 4rem;
+
+  /* Ukuran kontrol */
+  --sw-control-sm: 2rem;
+  --sw-control-md: 2.5rem;
+  --sw-control-lg: 2.875rem;
+  --sw-touch-target: 2.75rem;
+
+  /* Radius & elevation (dibatasi, bayangan hanya untuk lapisan mengambang) */
+  --sw-radius-xs: 5px;
+  --sw-radius-sm: 8px;
+  --sw-radius-md: 12px;
+  --sw-radius-lg: 18px;
+  --sw-radius-pill: 999px;
+  --sw-shadow-sm: 0 1px 2px rgba(28, 33, 31, 0.04);
+  --sw-shadow-md: 0 10px 30px -18px rgba(28, 33, 31, 0.28);
+  --sw-shadow-lg: 0 28px 60px -24px rgba(16, 40, 45, 0.35);
+  --sw-focus-ring: 0 0 0 2px var(--sw-panel), 0 0 0 4px var(--sw-accent);
+
+  /* Breakpoint (dipakai di media query; JS membaca nilai yang sama) */
+  --sw-bp-tablet: 768px;
+  --sw-bp-desktop: 1024px;
+  --sw-bp-wide: 1440px;
+
+  /* Motion — singkat dan bermakna, hormati reduced motion */
+  --sw-duration-fast: 130ms;
+  --sw-duration-base: 200ms;
+  --sw-duration-slow: 520ms;
+  --sw-ease: cubic-bezier(0.2, 0, 0.2, 1);
+  --sw-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Layout */
+  --sw-sidebar-width: 264px;
+  --sw-topbar-height: 4rem;
+  --sw-content-max: 1360px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --sw-duration-fast: 0ms;
+    --sw-duration-base: 0ms;
+    --sw-duration-slow: 0ms;
+  }
+}

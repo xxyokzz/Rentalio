@@ -1,0 +1,111 @@
+# CI Rentalio — gate kualitas untuk setiap push dan pull request.
+#
+# Gate yang dijalankan (berurutan, gagal cepat):
+#   0. bash scripts/actionlint.sh — statik check workflow ini sendiri
+#      (syntax, tipe ekspresi ${{ }}, input action, shellcheck pada run:)
+#   1. pnpm openapi:validate  — kontrak OpenAPI 3.1.1 + aturan status implementasi
+#   2. pnpm typecheck         — TypeScript strict
+#   3. pnpm lint              — ESLint (error = gagal; warning tidak)
+#   4. pnpm build             — tsc build semua package
+#   5. pnpm test              — unit + integration terhadap PostgreSQL 18 sungguhan
+#                               (globalSetup membangun schema dari database kosong)
+#
+# Dependensi lockfile dikunci via `pnpm install --frozen-lockfile`; versi Node
+# dibaca dari `.node-version` dan pnpm dari `packageManager` — jangan diduplikasi
+# di berkas ini.
+#
+# Catatan: workspace ini belum menjadi repository Git. Berkas siap dipakai
+# begitu repo di-push ke GitHub; pengecekan lokal (parse + bootstrap SQL) sudah
+# dilakukan dan didokumentasikan di README.
+
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# Minimal privilege: cukup membaca isi repository.
+permissions:
+  contents: read
+
+# Satu run per ref; run lama dibatalkan saat ada push baru.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality-gates:
+    name: Gate kualitas — openapi, typecheck, lint, build, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          # Sama dengan pengembangan lokal (trust untuk localhost):
+          # tanpa password, kredensial diperiksa lewat role di database.
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Gate 0 berjalan paling awal: gagal cepat saat workflow ini sendiri rusak,
+      # bahkan sebelum dependensi di-install. Pemakai binari actionlint yang sama
+      # dengan lokal (`pnpm actionlint`), dipin lewat ACTIONLINT_VERSION di skrip.
+      - name: Gate 0 — actionlint (validasi workflow)
+        run: bash scripts/actionlint.sh
+
+      # pnpm diambil dari field `packageManager` (pnpm@11.9.0) — tanpa input versi
+      # agar tidak ada dua sumber kebenaran.
+      - name: Siapkan pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Siapkan Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependensi (lockfile terkunci)
+        run: pnpm install --frozen-lockfile
+
+      # Role runtime & migrator + database test dibuat idempoten oleh SQL ini;
+      # migrasi yang dijalankan test gagal dengan pesan jelas bila role kurang.
+      # `-i` WAJIB agar stdin ter-attach ke container — tanpa itu SQL yang
+      # disalurkan lewat `<` dibuang diam-diam dan bootstrap tampak "sukses".
+      - name: Siapkan PostgreSQL (role & database test)
+        run: |
+          docker exec -i "${{ job.services.postgres.id }}" \
+            psql -U postgres -v ON_ERROR_STOP=1 \
+            < scripts/ci/bootstrap-postgres.sql
+
+      - name: Gate 1 — validasi kontrak OpenAPI
+        run: pnpm openapi:validate
+
+      - name: Gate 2 — typecheck
+        run: pnpm typecheck
+
+      - name: Gate 3 — lint
+        run: pnpm lint
+
+      - name: Gate 4 — build
+        run: pnpm build
+
+      # Test menjalankan globalSetup: reset schema sewain_test lalu
+      # `prisma migrate deploy` dari database kosong (membuktikan migrasi
+      # reproducible), kemudian seluruh unit + integration test.
+      - name: Gate 5 — unit & integration test (PostgreSQL)
+        run: pnpm test
+        env:
+          MIGRATOR_TEST_URL: postgresql://sewain_migrator@localhost:5432/sewain_test
+          DATABASE_URL: postgresql://sewain_dev@localhost:5432/sewain_test?schema=public

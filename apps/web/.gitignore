@@ -1,0 +1,13 @@
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+e2e/.auth/
+e2e/.artifacts/
+.next/
+out/
+node_modules/
+tsconfig.tsbuildinfo
+next-env.d.ts
+.eslintcache
+.env.local

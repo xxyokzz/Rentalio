@@ -1,0 +1,76 @@
+# ============================================================
+# Secrets & environment lokal
+# ============================================================
+.env
+.env.*
+!.env.example
+
+# ============================================================
+# Node & build output
+# ============================================================
+node_modules/
+dist/
+coverage/
+out/
+*.tsbuildinfo
+.eslintcache
+*.pid
+
+# ============================================================
+# Next.js (web & admin)
+# ============================================================
+.next/
+.vercel/
+# Dibuat ulang otomatis oleh `next dev` / `next build`.
+next-env.d.ts
+
+# ============================================================
+# Prisma client hasil generate (di-rebuild via `pnpm db:generate`)
+# ============================================================
+database/src/generated/
+database/prisma/*.db
+
+# ============================================================
+# Artefak lokal development
+# ============================================================
+.dev-mailbox/
+.dev-logs/
+.backups/
+# Folder tool desktop lokal (chat, project-id, log preview).
+.freebuff/
+# Tangkapan layar audit manual; bukan aset aplikasi. Hapus baris ini
+# bila screenshot memang ingin ikut di-commit sebagai dokumentasi.
+screenshots/
+
+# Skrip debug sekali pakai di apps/api (boleh dihapus kapan saja).
+apps/api/tmp-*
+
+# ============================================================
+# Artefak pengujian (Playwright & Vitest)
+# ============================================================
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+e2e/.auth/
+e2e/.artifacts/
+
+# ============================================================
+# Binari tool sekali-pakai (actionlint, dll.) — diunduh oleh scripts/*.sh
+# ============================================================
+.tools/
+
+# ============================================================
+# Local data
+# ============================================================
+data/
+*.log
+.pm2/
+
+# ============================================================
+# OS / editor
+# ============================================================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

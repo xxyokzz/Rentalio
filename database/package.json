@@ -1,0 +1,29 @@
+{
+  "name": "@rentalio/database",
+  "version": "0.0.1",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "generate": "prisma generate",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "migrate:status": "prisma migrate status",
+    "seed": "node prisma/seed.mjs",
+    "lint": "echo \"no lint target\"",
+    "typecheck": "tsc --noEmit",
+    "test": "pnpm test:unit",
+    "test:unit": "echo \"no unit tests\""
+  },
+  "dependencies": {
+    "@prisma/adapter-pg": "7.10.0",
+    "@prisma/client": "7.10.0",
+    "dotenv": "17.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "26.0.1",
+    "prisma": "7.10.0",
+    "typescript": "5.9.3"
+  }
+}

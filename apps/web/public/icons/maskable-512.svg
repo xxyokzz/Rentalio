@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Rentalio">
+  <rect width="512" height="512" fill="#0f172a"/>
+  <rect x="146" y="146" width="220" height="220" rx="44" fill="#1d5bd8"/>
+  <path d="M300 226c-8-14-24-22-43-22-26 0-43 13-43 35 0 20 15 29 46 36 23 5 30 11 30 22 0 12-11 20-28 20-20 0-35-9-42-27" fill="none" stroke="#ffffff" stroke-width="20" stroke-linecap="round"/>
+</svg>

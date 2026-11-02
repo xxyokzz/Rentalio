@@ -1,0 +1,36 @@
+{
+  "name": "rentalio",
+  "private": true,
+  "version": "0.0.1",
+  "description": "Rentalio — platform rental multi-tenant. Monorepo backend + database.",
+  "packageManager": "pnpm@11.9.0",
+  "engines": {
+    "node": "26.1.0"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:unit": "pnpm -r test:unit",
+    "db:migrate": "pnpm --filter @rentalio/database migrate:deploy",
+    "db:migrate:dev": "pnpm --filter @rentalio/database migrate:dev",
+    "db:generate": "pnpm --filter @rentalio/database generate",
+    "db:backup:verify": "node scripts/ops/backup-restore.mjs",
+    "dev": "pnpm --parallel --filter @rentalio/api --filter @rentalio/web --filter @rentalio/admin dev",
+    "api:dev": "pnpm --filter @rentalio/api dev",
+    "web:dev": "pnpm --filter @rentalio/web dev",
+    "admin:dev": "pnpm --filter @rentalio/admin dev",
+    "admin:seed": "pnpm --filter @rentalio/api admin:seed",
+    "worker": "pnpm --filter @rentalio/api worker",
+    "worker:start": "pnpm --filter @rentalio/api start:worker",
+    "openapi:validate": "node scripts/validate-openapi.mjs",
+    "qa:seed:badges": "node scripts/qa/seed-badge-data.mjs",
+    "actionlint": "bash scripts/actionlint.sh"
+  },
+  "devDependencies": {
+    "@readme/openapi-parser": "5.5.0",
+    "typescript": "5.9.3",
+    "yaml": "2.8.1"
+  }
+}
