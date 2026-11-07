@@ -26,7 +26,8 @@
     "worker:start": "pnpm --filter @rentalio/api start:worker",
     "openapi:validate": "node scripts/validate-openapi.mjs",
     "qa:seed:badges": "node scripts/qa/seed-badge-data.mjs",
-    "actionlint": "bash scripts/actionlint.sh"
+    "actionlint": "bash scripts/actionlint.sh",
+    "setup:clean": "node scripts/setup-clean-install.mjs"
   },
   "devDependencies": {
     "@readme/openapi-parser": "5.5.0",
