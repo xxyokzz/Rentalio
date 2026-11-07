@@ -1,6 +1,8 @@
 import { cookies } from "next/headers";
 import type {
   AuditEvent,
+  CronRun,
+  CronRunStatus,
   Paged,
   PlatformAdminDetail,
   PlatformAdminPrincipal,
@@ -129,5 +131,14 @@ export function listAuditEvents(input: {
       to: input.to,
       page: input.page,
     })}`,
+  );
+}
+
+export function listCronRuns(input: {
+  status?: CronRunStatus;
+  page: number;
+}): Promise<Paged<CronRun>> {
+  return request<Paged<CronRun>>(
+    `/platform-admin/cron-runs${query({ status: input.status, page: input.page })}`,
   );
 }

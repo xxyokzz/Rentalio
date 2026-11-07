@@ -445,6 +445,13 @@ textarea {
   border-color: var(--ad-info-border);
 }
 
+.job-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  max-width: 30rem;
+}
+
 /* ============================================================
    Tombol
    ============================================================ */

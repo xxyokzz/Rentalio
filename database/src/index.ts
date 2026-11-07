@@ -17,4 +17,5 @@ export {
   PaymentMethod,
   WhatsAppTemplatePurpose,
   SubscriptionInvoiceStatus,
+  CronRunStatus,
 } from './generated/client/client.js';

@@ -37,6 +37,7 @@ ditampilkan sekali).
 | `/login`            | —                              | Password, enrollment/TOTP, kode pemulihan                  |
 | `/tenants`          | `platform.tenants.list`        | Direktori tenant: cari, filter status, paginasi            |
 | `/tenants/[id]`     | `platform.tenants.read_summary`| Ringkasan tenant, suspend/reactivate, settle tagihan QRIS  |
+| `/cron`             | `platform.dashboard.read`      | Riwayat cron: status per job, durasi, hasil, alert         |
 | `/admins`           | `platform.roles.read`          | Direktori Admin Platform + role aktif                      |
 | `/admins/[id]`      | `platform.roles.read`          | Role aktif, permission efektif, assign/revoke role         |
 | `/audit`            | `platform.audit.read`          | Audit viewer: aksi, aktor, rentang waktu                   |

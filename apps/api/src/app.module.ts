@@ -22,6 +22,7 @@ import { CorrelationIdMiddleware } from './common/correlation-id.middleware.js';
 import { RequestLoggingMiddleware } from './common/request-logging.middleware.js';
 import { StructuredLogger } from './common/logger.service.js';
 import { HealthController } from './health/health.controller.js';
+import { CronController } from './internal/cron.controller.js';
 import { StorageModule } from './storage/storage.module.js';
 import { PlatformAdminModule } from './platform-admin/platform-admin.module.js';
 import { BillingModule } from './billing/billing.module.js';
@@ -51,7 +52,7 @@ import { BillingModule } from './billing/billing.module.js';
     PlatformAdminModule,
     BillingModule,
   ],
-  controllers: [HealthController],
+  controllers: [HealthController, CronController],
   providers: [StructuredLogger],
   exports: [StructuredLogger],
 })

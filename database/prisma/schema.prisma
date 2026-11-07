@@ -363,6 +363,30 @@ model PlatformAdminRecoveryCode {
   @@map("platform_admin_recovery_codes")
 }
 
+/// Status satu putaran endpoint cron Vercel.
+enum CronRunStatus {
+  SUCCEEDED
+  PARTIAL
+  FAILED
+}
+
+/// Riwayat eksekusi cron serverless. Platform-level (tanpa tenant); dipakai
+/// endpoint status dan alerting operasional. Baris lama dipangkas 14 hari.
+model CronRun {
+  id          String        @id @default(uuid()) @db.Uuid
+  startedAt   DateTime      @default(now())
+  finishedAt  DateTime      @default(now())
+  status      CronRunStatus @default(SUCCEEDED)
+  durationMs  Int
+  failedJobs  String[]      @default([])
+  results     Json?
+  alertedAt   DateTime?
+
+  @@index([startedAt])
+  @@index([alertedAt])
+  @@map("cron_runs")
+}
+
 model PlatformAuditEvent {
   id              String             @id @default(uuid()) @db.Uuid
   /**

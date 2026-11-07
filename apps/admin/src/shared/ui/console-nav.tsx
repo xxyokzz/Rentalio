@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 
 const ITEMS = [
   { href: "/tenants", label: "Tenant", permission: "platform.tenants.list" },
+  { href: "/cron", label: "Cron", permission: "platform.dashboard.read" },
   { href: "/admins", label: "Admin & role", permission: "platform.roles.read" },
   { href: "/audit", label: "Audit", permission: "platform.audit.read" },
 ] as const;

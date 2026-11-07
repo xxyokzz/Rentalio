@@ -1,4 +1,4 @@
-import type { TenantStatus } from "./api/types";
+import type { CronJobName, CronJobState, CronRunStatus, TenantStatus } from "./api/types";
 
 export const TENANT_STATUSES: readonly TenantStatus[] = [
   "PENDING_ACTIVATION",
@@ -19,6 +19,48 @@ export const TENANT_STATUS_TONES: Record<TenantStatus, string> = {
   ACTIVE: "active",
   SUSPENDED: "suspended",
   CLOSED: "closed",
+};
+
+export const CRON_RUN_STATUSES: readonly CronRunStatus[] = [
+  "SUCCEEDED",
+  "PARTIAL",
+  "FAILED",
+];
+
+export const CRON_RUN_STATUS_LABELS: Record<CronRunStatus, string> = {
+  SUCCEEDED: "Sukses",
+  PARTIAL: "Sebagian",
+  FAILED: "Gagal",
+};
+
+export const CRON_RUN_STATUS_TONES: Record<CronRunStatus, string> = {
+  SUCCEEDED: "active",
+  PARTIAL: "pending",
+  FAILED: "suspended",
+};
+
+export const CRON_JOB_NAMES: readonly CronJobName[] = [
+  "outbox",
+  "subscriptions",
+  "billingReminders",
+];
+
+export const CRON_JOB_LABELS: Record<CronJobName, string> = {
+  outbox: "Outbox",
+  subscriptions: "Subscription",
+  billingReminders: "Billing reminder",
+};
+
+export const CRON_JOB_STATE_LABELS: Record<CronJobState, string> = {
+  SUCCEEDED: "Sukses",
+  FAILED: "Gagal",
+  UNKNOWN: "Tidak diketahui",
+};
+
+export const CRON_JOB_STATE_TONES: Record<CronJobState, string> = {
+  SUCCEEDED: "active",
+  FAILED: "suspended",
+  UNKNOWN: "closed",
 };
 
 /** Harus sama dengan `PLATFORM_AUDIT_ACTIONS` di API agar filter tidak ditolak 400. */

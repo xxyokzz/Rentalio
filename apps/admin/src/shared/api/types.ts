@@ -76,6 +76,22 @@ export interface AuditEvent {
   createdAt: string;
 }
 
+export type CronRunStatus = "SUCCEEDED" | "PARTIAL" | "FAILED";
+export type CronJobName = "outbox" | "subscriptions" | "billingReminders";
+export type CronJobState = "SUCCEEDED" | "FAILED" | "UNKNOWN";
+
+export interface CronRun {
+  id: string;
+  startedAt: string;
+  finishedAt: string;
+  status: CronRunStatus;
+  durationMs: number;
+  failedJobs: string[];
+  results: Record<string, unknown> | null;
+  alertedAt: string | null;
+  jobs: Record<CronJobName, CronJobState>;
+}
+
 export interface LoginResult {
   status: "MFA_REQUIRED" | "MFA_ENROLLMENT_REQUIRED";
   challenge: {
