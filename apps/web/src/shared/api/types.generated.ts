@@ -1000,6 +1000,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/internal/cron": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Jalankan job cron periodik (outbox, subscription, reminder tagihan)
+         * @description Dipanggil scheduler infrastruktur (mis. cron sistem/VPS atau penjadwal
+         *     eksternal), bukan oleh pengguna. Job dijalankan berurutan: `outbox`,
+         *     `subscriptions`, lalu `billingReminders`.
+         *
+         *     Setiap putaran dicatat ke `cron_runs` — status keseluruhan, durasi, hasil
+         *     per job, dan daftar job gagal — lalu run yang lebih tua dari 14 hari
+         *     dipangkas agar tabel tetap kecil. Kegagalan mengirim email alert ke
+         *     `CRON_ALERT_EMAIL` (fallback `PLATFORM_OPERATOR_EMAIL`) dengan cooldown
+         *     `CRON_ALERT_COOLDOWN_SECONDS` supaya tidak membanjiri saat job terus gagal.
+         *
+         *     Bila ada job gagal, respons 503 `INTERNAL_ERROR`; karena body error sengaja
+         *     tidak membawa detail internal, rincian job yang gagal dibaca dari log
+         *     terstruktur `cron_run_finished` atau dari riwayat
+         *     `GET /platform-admin/cron-runs`.
+         */
+        get: operations["runInternalCron"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/internal/cron/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Kesehatan cron — ok, degraded, stale, atau unknown
+         * @description Menghitung umur run terakhir terhadap `CRON_STALE_AFTER_SECONDS`.
+         *     `stale` bila belum pernah ada run atau umurnya melewati ambang;
+         *     `degraded` bila run terakhir `PARTIAL`/`FAILED`; `unknown` bila riwayat
+         *     tidak dapat dibaca (mis. database tidak terjangkau).
+         *
+         *     Token yang diterima: `CRON_STATUS_TOKEN`, atau `CRON_SECRET` bila token
+         *     status tidak diatur. Body selalu dikembalikan lengkap, tetapi status HTTP
+         *     ikut menjadi 503 untuk kesehatan selain `ok` — dan `unknown` — agar probe
+         *     serta penjadwal tidak menganggap keadaan baik-baik saja.
+         */
+        get: operations["getInternalCronStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tenants/{tenantId}/availability": {
         parameters: {
             query?: never;
@@ -1900,6 +1961,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/platform-admin/auth/reauth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Re-authentication sesi admin (password + TOTP) untuk tindakan berisiko
+         * @description Menyegarkan `reauthenticatedAt` sesi aktif sebelum tindakan berisiko (suspend/reactivate tenant, assignment role, settle tagihan). Password dan kode TOTP diverifikasi ulang; langkah waktu TOTP yang sudah dipakai login tidak dapat diulang karena `lastTotpStep` bersifat global per akun, sehingga kode yang sama ditolak meski masih berada dalam jendela toleransi. Login MFA penuh sudah dihitung sebagai re-authentication; sesi yang lebih tua dari 10 menit sejak re-auth terakhir dijawab `403 REAUTHENTICATION_REQUIRED` pada endpoint berisiko. Sebagai mutasi berbasis cookie admin, endpoint ini wajib `X-Platform-Admin-CSRF` dan Origin admin yang persis.
+         */
+        post: operations["platformAdminReauthenticate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/platform-admin/session": {
         parameters: {
             query?: never;
@@ -2035,7 +2116,7 @@ export interface paths {
         put?: never;
         /**
          * Tandai tagihan langganan QRIS lunas — wajib referensi, CSRF admin, dan audit
-         * @description Karena QRIS dinamis tidak memiliki callback pembayaran, hanya tindakan operator ini yang dapat memindahkan tagihan `PENDING` → `PAID`. Endpoint memerlukan permission `platform.subscriptions.settle` (Super Admin dan Billing), CSRF admin, serta Origin admin yang persis. Klaim memakai syarat status `PENDING` sehingga dua operator yang menekan bersamaan hanya memperpanjang langganan **sekali**; percobaan kedua dijawab `409`. Nominal diterima harus >= nilai tagihan. Setiap percobaan (berhasil maupun ditolak) menulis `PLATFORM_SUBSCRIPTION_INVOICE_SETTLED` beserta alasan/referensi.
+         * @description Karena QRIS dinamis tidak memiliki callback pembayaran, hanya tindakan operator ini yang dapat memindahkan tagihan `PENDING` → `PAID`. Endpoint memerlukan permission `platform.subscriptions.settle` (Super Admin dan Billing), CSRF admin, Origin admin yang persis, serta re-authentication yang masih segar: sesi yang `reauthenticatedAt`-nya lebih tua dari 10 menit dijawab `403 REAUTHENTICATION_REQUIRED` dan harus menyegarkannya lewat `POST /platform-admin/auth/reauth`. Klaim memakai syarat status `PENDING` sehingga dua operator yang menekan bersamaan hanya memperpanjang langganan **sekali**; percobaan kedua dijawab `409`. Nominal diterima harus >= nilai tagihan. Setiap percobaan (berhasil maupun ditolak) menulis `PLATFORM_SUBSCRIPTION_INVOICE_SETTLED` beserta alasan/referensi.
          */
         post: operations["platformAdminSettleSubscriptionInvoice"];
         delete?: never;
@@ -2056,6 +2137,26 @@ export interface paths {
          * @description Membaca `platform_audit_events` (append-only; tidak ada endpoint ubah/hapus). Urutan terbaru lebih dulu dengan `id` sebagai tiebreaker agar paginasi stabil. `from`/`to` bersifat inklusif; `from` setelah `to` dijawab `400 VALIDATION_ERROR`, begitu pula `actorAdminId` yang bukan UUID dan `action` di luar daftar aksi yang dikenal. Membaca log audit sengaja **tidak** menulis event baru: pembacaan yang menulis log akan menumbuhkan log tanpa batas dan membuka jalan log flooding. Akses dibatasi permission `platform.audit.read` + sesi admin terverifikasi MFA + `Cache-Control: no-store`.
          */
         get: operations["platformAdminListAuditEvents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/platform-admin/cron-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Riwayat eksekusi cron Vercel beserta status setiap job
+         * @description Riwayat `cron_runs`, terbaru lebih dulu dengan `id` sebagai tiebreaker agar paginasi stabil. Setiap baris memuat status keseluruhan, durasi, daftar job gagal, hasil per job, dan `jobs` turunan (`SUCCEEDED`/`FAILED`/`UNKNOWN`). `UNKNOWN` berarti job belum berjalan, mis. worker context gagal sebelum job dimulai. Endpoint read-only ini tidak memicu job; akses dibatasi permission `platform.dashboard.read`, sesi admin terverifikasi MFA, dan `Cache-Control: no-store`.
+         */
+        get: operations["platformAdminListCronRuns"];
         put?: never;
         post?: never;
         delete?: never;
@@ -3869,6 +3970,82 @@ export interface components {
             page: number;
             pageSize: number;
             total: number;
+        };
+        /** @enum {string} */
+        PlatformCronRunJobState: "SUCCEEDED" | "FAILED" | "UNKNOWN";
+        /** @description Satu putaran endpoint cron Vercel. `jobs` menurunkan status per job dari `failedJobs` dan `results`; `UNKNOWN` berarti job belum berjalan (mis. worker context gagal sebelum job dimulai). Hasil job hanya berisi hitungan operasional, bukan data tenant. */
+        PlatformCronRun: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string;
+            /** @enum {string} */
+            status: "SUCCEEDED" | "PARTIAL" | "FAILED";
+            durationMs: number;
+            failedJobs: string[];
+            /** @description Hasil per job (hitungan operasional), bukan data pelanggan. */
+            results: {
+                [key: string]: unknown;
+            } | null;
+            /** Format: date-time */
+            alertedAt: string | null;
+            jobs: {
+                outbox: components["schemas"]["PlatformCronRunJobState"];
+                subscriptions: components["schemas"]["PlatformCronRunJobState"];
+                billingReminders: components["schemas"]["PlatformCronRunJobState"];
+            };
+        };
+        PlatformCronRunPage: {
+            data: components["schemas"]["PlatformCronRun"][];
+            page: number;
+            pageSize: number;
+            total: number;
+        };
+        /** @description Hasil satu putaran cron. Nilai tiap job berbeda bentuknya dan hanya berisi hitungan operasional, bukan data pelanggan. */
+        InternalCronRunResponse: {
+            /** @enum {string} */
+            status: "ok";
+            jobs: {
+                outbox: {
+                    [key: string]: unknown;
+                };
+                subscriptions: {
+                    [key: string]: unknown;
+                };
+                billingReminders: {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        /** @description Ringkasan run terakhir yang dibaca endpoint status. */
+        InternalCronRunSummary: {
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** Format: date-time */
+            finishedAt: string;
+            /** @enum {string} */
+            status: "SUCCEEDED" | "PARTIAL" | "FAILED";
+            durationMs: number;
+            failedJobs: string[];
+            results: {
+                [key: string]: unknown;
+            } | null;
+            /** Format: date-time */
+            alertedAt: string | null;
+        };
+        /** @description Kesehatan cron beserta run terakhir. `results` dan `lastRun` dapat bernilai `null`; `UNKNOWN` tidak dipakai di sini karena status kesehatan memakai enum terpisah. */
+        InternalCronStatusResponse: {
+            /** @enum {string} */
+            status: "ok" | "degraded" | "stale" | "unknown";
+            /** Format: date-time */
+            checkedAt: string;
+            staleAfterSeconds: number;
+            ageSeconds: number | null;
+            lastRun: components["schemas"]["InternalCronRunSummary"] | null;
         };
         PlatformTenantStatusChangeRequest: {
             /** @description Alasan operasional yang disimpan di audit, bukan sekadar validasi UI. */
@@ -6165,6 +6342,84 @@ export interface operations {
             };
         };
     };
+    runInternalCron: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Semua job selesai */
+            200: {
+                headers: {
+                    /** @description Selalu `no-store` — hasil tidak boleh di-cache. */
+                    "Cache-Control"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InternalCronRunResponse"];
+                };
+            };
+            /** @description Header `Authorization` tidak ada atau bukan `Bearer <CRON_SECRET>` */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description `CRON_SECRET` belum diatur, worker context gagal disiapkan, atau sebagian/seluruh job gagal (tetap dicatat di `cron_runs`). */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    getInternalCronStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Cron sehat — run terakhir sukses dan belum stale */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InternalCronStatusResponse"];
+                };
+            };
+            /** @description Header `Authorization` tidak ada atau bukan `Bearer` dari `CRON_STATUS_TOKEN`/`CRON_SECRET`. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Dua kemungkinan. (1) `CRON_STATUS_TOKEN`/`CRON_SECRET` belum diatur — body `ErrorBody` dengan `INTERNAL_ERROR` seperti endpoint cron utama. (2) Token valid tetapi kesehatan bukan `ok` (`degraded`, `stale`, atau `unknown`) — body tetap berbentuk status cron agar penyebabnya terbaca. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InternalCronStatusResponse"] | components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     checkAvailability: {
         parameters: {
             query: {
@@ -8447,6 +8702,61 @@ export interface operations {
             429: components["responses"]["RateLimited"];
         };
     };
+    platformAdminReauthenticate: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description Token CSRF terikat sesi admin (dari GET /platform-admin/csrf). */
+                "X-Platform-Admin-CSRF": components["parameters"]["platformAdminCsrfToken"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    password: string;
+                    code: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Re-authentication berhasil; waktu re-auth baru ada di body */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** Format: date-time */
+                            reauthenticatedAt: string;
+                        };
+                    };
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            /** @description Sesi admin tidak valid, password salah, atau kode MFA salah/sudah dipakai */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            /** @description Origin admin tidak diizinkan atau token CSRF admin tidak valid */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            429: components["responses"]["RateLimited"];
+        };
+    };
     platformAdminGetSession: {
         parameters: {
             query?: never;
@@ -8802,7 +9112,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
-            /** @description Tidak memiliki `platform.subscriptions.settle`, atau Origin/token CSRF admin tidak valid */
+            /** @description Tidak memiliki `platform.subscriptions.settle`, Origin/token CSRF admin tidak valid, atau re-authentication sesi sudah kedaluwarsa (`REAUTHENTICATION_REQUIRED`) */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8870,6 +9180,49 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             /** @description Sesi admin tidak memiliki `platform.audit.read` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    platformAdminListCronRuns: {
+        parameters: {
+            query?: {
+                status?: "SUCCEEDED" | "PARTIAL" | "FAILED";
+                page?: number;
+                pageSize?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Halaman riwayat cron */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformCronRunPage"];
+                };
+            };
+            /** @description Filter status atau paginasi tidak valid */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Sesi admin tidak memiliki `platform.dashboard.read` */
             403: {
                 headers: {
                     [name: string]: unknown;

@@ -64,6 +64,11 @@ components:
       name: rentalio_platform_admin
       description: >-
         Session token Admin Platform, HttpOnly dan **host-only** untuk origin aplikasi admin. Diperoleh hanya setelah password + TOTP terverifikasi. Cookie ini tidak pernah berlaku untuk origin tenant, dan `rentalio_session` tidak pernah diterima sebagai bukti identitas admin.
+    cronBearer:
+      type: http
+      scheme: bearer
+      description: >-
+        Shared secret untuk endpoint operasional `/internal/cron`. Scheduler mengirim `Authorization: Bearer <CRON_SECRET>`; endpoint status menerima `CRON_STATUS_TOKEN` bila diatur, atau jatuh ke `CRON_SECRET`. Perbandingan dilakukan timing-safe, dan bila secret belum dikonfigurasi endpoint menolak semua request (503) alih-alih terbuka.
 
   # ============================================================
   # Reusable schemas
@@ -2750,6 +2755,83 @@ components:
           type: integer
           minimum: 0
 
+    InternalCronRunResponse:
+      type: object
+      required: [ status, jobs ]
+      description: >-
+        Hasil satu putaran cron. Nilai tiap job berbeda bentuknya dan hanya berisi hitungan operasional, bukan data pelanggan.
+      properties:
+        status:
+          type: string
+          enum: [ ok ]
+        jobs:
+          type: object
+          required: [ outbox, subscriptions, billingReminders ]
+          properties:
+            outbox:
+              type: object
+              additionalProperties: true
+            subscriptions:
+              type: object
+              additionalProperties: true
+            billingReminders:
+              type: object
+              additionalProperties: true
+
+    InternalCronRunSummary:
+      type: object
+      required: [ id, startedAt, finishedAt, status, durationMs, failedJobs, results, alertedAt ]
+      description: Ringkasan run terakhir yang dibaca endpoint status.
+      properties:
+        id:
+          type: string
+          format: uuid
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [ SUCCEEDED, PARTIAL, FAILED ]
+        durationMs:
+          type: integer
+          minimum: 0
+        failedJobs:
+          type: array
+          items:
+            type: string
+        results:
+          type: [ object, 'null' ]
+          additionalProperties: true
+        alertedAt:
+          type: [ string, 'null' ]
+          format: date-time
+
+    InternalCronStatusResponse:
+      type: object
+      required: [ status, checkedAt, staleAfterSeconds, ageSeconds, lastRun ]
+      description: >-
+        Kesehatan cron beserta run terakhir. `results` dan `lastRun` dapat bernilai `null`; `UNKNOWN` tidak dipakai di sini karena status kesehatan memakai enum terpisah.
+      properties:
+        status:
+          type: string
+          enum: [ ok, degraded, stale, unknown ]
+        checkedAt:
+          type: string
+          format: date-time
+        staleAfterSeconds:
+          type: integer
+          minimum: 1
+        ageSeconds:
+          type: [ integer, 'null' ]
+          minimum: 0
+        lastRun:
+          oneOf:
+            - $ref: '#/components/schemas/InternalCronRunSummary'
+            - type: 'null'
+
     PlatformTenantStatusChangeRequest:
       type: object
       required: [ reason ]
@@ -5418,6 +5500,104 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ReadinessResponse'
+
+  /internal/cron:
+    x-implementation-status: implemented
+    get:
+      tags: [ Internal ]
+      operationId: runInternalCron
+      x-required-permission: internal
+      security:
+        - cronBearer: []
+      summary: Jalankan job cron periodik (outbox, subscription, reminder tagihan)
+      description: |
+        Dipanggil scheduler infrastruktur (mis. cron sistem/VPS atau penjadwal
+        eksternal), bukan oleh pengguna. Job dijalankan berurutan: `outbox`,
+        `subscriptions`, lalu `billingReminders`.
+
+        Setiap putaran dicatat ke `cron_runs` — status keseluruhan, durasi, hasil
+        per job, dan daftar job gagal — lalu run yang lebih tua dari 14 hari
+        dipangkas agar tabel tetap kecil. Kegagalan mengirim email alert ke
+        `CRON_ALERT_EMAIL` (fallback `PLATFORM_OPERATOR_EMAIL`) dengan cooldown
+        `CRON_ALERT_COOLDOWN_SECONDS` supaya tidak membanjiri saat job terus gagal.
+
+        Bila ada job gagal, respons 503 `INTERNAL_ERROR`; karena body error sengaja
+        tidak membawa detail internal, rincian job yang gagal dibaca dari log
+        terstruktur `cron_run_finished` atau dari riwayat
+        `GET /platform-admin/cron-runs`.
+      responses:
+        '200':
+          description: Semua job selesai
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+              description: Selalu `no-store` — hasil tidak boleh di-cache.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InternalCronRunResponse'
+        '401':
+          description: Header `Authorization` tidak ada atau bukan `Bearer <CRON_SECRET>`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: >
+            `CRON_SECRET` belum diatur, worker context gagal disiapkan, atau
+            sebagian/seluruh job gagal (tetap dicatat di `cron_runs`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+
+  /internal/cron/status:
+    x-implementation-status: implemented
+    get:
+      tags: [ Internal ]
+      operationId: getInternalCronStatus
+      x-required-permission: internal
+      security:
+        - cronBearer: []
+      summary: Kesehatan cron — ok, degraded, stale, atau unknown
+      description: |
+        Menghitung umur run terakhir terhadap `CRON_STALE_AFTER_SECONDS`.
+        `stale` bila belum pernah ada run atau umurnya melewati ambang;
+        `degraded` bila run terakhir `PARTIAL`/`FAILED`; `unknown` bila riwayat
+        tidak dapat dibaca (mis. database tidak terjangkau).
+
+        Token yang diterima: `CRON_STATUS_TOKEN`, atau `CRON_SECRET` bila token
+        status tidak diatur. Body selalu dikembalikan lengkap, tetapi status HTTP
+        ikut menjadi 503 untuk kesehatan selain `ok` — dan `unknown` — agar probe
+        serta penjadwal tidak menganggap keadaan baik-baik saja.
+      responses:
+        '200':
+          description: Cron sehat — run terakhir sukses dan belum stale
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InternalCronStatusResponse'
+        '401':
+          description: >
+            Header `Authorization` tidak ada atau bukan `Bearer` dari
+            `CRON_STATUS_TOKEN`/`CRON_SECRET`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '503':
+          description: >
+            Dua kemungkinan. (1) `CRON_STATUS_TOKEN`/`CRON_SECRET` belum diatur —
+            body `ErrorBody` dengan `INTERNAL_ERROR` seperti endpoint cron utama.
+            (2) Token valid tetapi kesehatan bukan `ok` (`degraded`, `stale`, atau
+            `unknown`) — body tetap berbentuk status cron agar penyebabnya terbaca.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: '#/components/schemas/InternalCronStatusResponse'
+                  - $ref: '#/components/schemas/ErrorBody'
 
   # ============================================================
   # Reservation & Availability (ADR-001 §1)
@@ -8533,3 +8713,8 @@ tags:
       identitas admin. Setiap operasi wajib mendeklarasikan permission
       `platform.*` (deny-by-default), dan semua mutasi wajib CSRF + Origin
       admin yang persis.
+  - name: Internal
+    description: |
+      Endpoint operasional yang dipanggil scheduler/infrastruktur, bukan
+      pengguna. Diautentikasi shared secret (`Authorization: Bearer ...`), tidak
+      memakai cookie sesi, dan tidak pernah mengembalikan data tenant.
