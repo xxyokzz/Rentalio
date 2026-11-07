@@ -146,4 +146,42 @@ describe('validateConfig', () => {
       }),
     ).toThrow(/EMAIL_PROVIDER/);
   });
+
+  it('cron memakai default monitoring yang aman', () => {
+    const cfg = validateConfig({ ...base });
+    expect(cfg.CRON_STATUS_TOKEN).toBeUndefined();
+    expect(cfg.CRON_ALERT_EMAIL).toBeUndefined();
+    expect(cfg.CRON_ALERT_COOLDOWN_SECONDS).toBe(3_600);
+    expect(cfg.CRON_STALE_AFTER_SECONDS).toBe(300);
+  });
+
+  it('CRON_ALERT_EMAIL tidak valid ditolak', () => {
+    expect(() =>
+      validateConfig({ ...base, CRON_ALERT_EMAIL: 'bukan-email' }),
+    ).toThrow(/CRON_ALERT_EMAIL/);
+  });
+
+  it('CRON_ALERT_COOLDOWN_SECONDS harus dalam batas', () => {
+    expect(() =>
+      validateConfig({ ...base, CRON_ALERT_COOLDOWN_SECONDS: '59' }),
+    ).toThrow(/CRON_ALERT_COOLDOWN_SECONDS/);
+  });
+
+  it('CRON_STALE_AFTER_SECONDS harus dalam batas', () => {
+    expect(() =>
+      validateConfig({ ...base, CRON_STALE_AFTER_SECONDS: '86401' }),
+    ).toThrow(/CRON_STALE_AFTER_SECONDS/);
+  });
+
+  it('token dan email cron dipangkas', () => {
+    const cfg = validateConfig({
+      ...base,
+      CRON_SECRET: '  rahasia  ',
+      CRON_STATUS_TOKEN: '  status  ',
+      CRON_ALERT_EMAIL: '  ops@example.com  ',
+    });
+    expect(cfg.CRON_SECRET).toBe('rahasia');
+    expect(cfg.CRON_STATUS_TOKEN).toBe('status');
+    expect(cfg.CRON_ALERT_EMAIL).toBe('ops@example.com');
+  });
 });

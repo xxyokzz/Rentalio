@@ -16,7 +16,15 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   private static readonly TRANSACTION_RETRY_DELAYS_MS = [10, 25, 50] as const;
 
   constructor(@Inject('APP_CONFIG') config: AppConfig) {
-    const adapter = new PrismaPg({ connectionString: config.DATABASE_URL });
+    // Supabase transaction pooler: pakai pool kecil di serverless (mis. 1)
+    // supaya jumlah koneksi tidak meledak mengikuti jumlah instance function.
+    // Timeout eksplisit menghindari request menggantung saat pooler sibuk.
+    const adapter = new PrismaPg({
+      connectionString: config.DATABASE_URL,
+      max: config.DATABASE_POOL_MAX,
+      connectionTimeoutMillis: 10_000,
+      idleTimeoutMillis: 10_000,
+    });
     this.client = new PrismaClient({ adapter });
   }
 

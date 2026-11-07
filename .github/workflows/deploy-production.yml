@@ -1,0 +1,243 @@
+# Deploy production Rentalio — backup + migrasi Supabase sebagai gerbang.
+#
+# Alur:
+#   1. Backup Supabase dengan pg_dump, enkripsi, dan simpan sebagai artifact.
+#   2. Jalankan `prisma migrate deploy` ke Supabase.
+#   3. Trigger Deploy Hook API, tunggu health, lalu trigger web dan admin.
+#
+# Vercel Hobby:
+#   - Cron per menit tidak didukung dan akan menggagalkan deployment. Repo ini
+#     tidak mendaftarkan `crons`; jalankan job periodik lewat scheduler
+#     eksternal atau worker long-lived.
+#   - Auto-deploy branch main/master dimatikan di `vercel.json` agar deploy
+#     production hanya terjadi lewat Deploy Hook dari workflow ini.
+#
+# Secrets environment `production`:
+#   SUPABASE_BACKUP_URL           role backup dengan BYPASSRLS/superuser
+#   SUPABASE_MIGRATION_URL        sewain_migrator, session pooler port 5432
+#   BACKUP_ENCRYPTION_PASSPHRASE  passphrase untuk artifact backup
+#   VERCEL_DEPLOY_HOOK_API        Deploy Hook project API
+#   VERCEL_DEPLOY_HOOK_WEB        Deploy Hook project web
+#   VERCEL_DEPLOY_HOOK_ADMIN      Deploy Hook project admin
+#   API_HEALTH_URL                https://api.../api/v1/health/ready
+#
+# Jangan menaruh nilai secret di file ini.
+
+name: Deploy production
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Ketik DEPLOY untuk mengonfirmasi rilis production'
+        required: true
+        type: string
+      deploy:
+        description: 'Trigger Deploy Hook Vercel setelah migrasi'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Backup, migrasi, dan deploy production
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+
+    steps:
+      - name: Konfirmasi rilis
+        env:
+          CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -euo pipefail
+          if [ "$CONFIRM" != "DEPLOY" ]; then
+            echo "::error::Ketik DEPLOY pada input konfirmasi untuk melanjutkan."
+            exit 1
+          fi
+
+      - name: Pastikan branch produksi
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          case "$REF_NAME" in
+            main|master) ;;
+            *)
+              echo "::error::Jalankan workflow dari branch main/master agar Deploy Hook mengantrekan commit yang benar."
+              exit 1
+              ;;
+          esac
+
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Siapkan pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Siapkan Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+
+      - name: Install dependensi (lockfile terkunci)
+        run: pnpm install --frozen-lockfile
+
+      - name: Validasi secret backup dan migrasi
+        env:
+          BACKUP_URL: ${{ secrets.SUPABASE_BACKUP_URL }}
+          MIGRATION_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in BACKUP_URL MIGRATION_URL PASSPHRASE; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Secret $name belum di-set pada environment production."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Validasi Deploy Hook
+        if: ${{ inputs.deploy }}
+        env:
+          API_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK_API }}
+          WEB_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK_WEB }}
+          ADMIN_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK_ADMIN }}
+          API_HEALTH_URL: ${{ secrets.API_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for name in API_HOOK WEB_HOOK ADMIN_HOOK API_HEALTH_URL; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Secret $name belum di-set pada environment production."
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Pastikan role backup dapat membaca seluruh baris
+        env:
+          BACKUP_URL: ${{ secrets.SUPABASE_BACKUP_URL }}
+        run: |
+          set -euo pipefail
+          role_ok="$(docker run --rm --user "$(id -u):$(id -g)" postgres:18 \
+            psql -Atc \
+            "select (rolsuper or rolbypassrls)::text from pg_roles where rolname = current_user" \
+            "$BACKUP_URL")"
+          echo "Backup role superuser/BYPASSRLS: $role_ok"
+          test "$role_ok" = "true"
+
+      - name: Backup Supabase (terenkripsi)
+        env:
+          BACKUP_URL: ${{ secrets.SUPABASE_BACKUP_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_ENCRYPTION_PASSPHRASE }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p .backups
+
+          DUMP=".backups/rentalio-${RUN_ID}.dump"
+          ENCRYPTED="${DUMP}.gpg"
+          trap 'rm -f "$DUMP"' EXIT
+
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$PWD/.backups:/backups" \
+            postgres:18 \
+            pg_dump --format=custom --schema=public \
+              --file="/backups/$(basename "$DUMP")" "$BACKUP_URL"
+
+          test -s "$DUMP"
+
+          docker run --rm --user "$(id -u):$(id -g)" \
+            -v "$PWD/.backups:/backups" \
+            postgres:18 \
+            pg_restore --list "/backups/$(basename "$DUMP")" >/dev/null
+
+          printf '%s' "$PASSPHRASE" | gpg --batch --yes --symmetric \
+            --cipher-algo AES256 --pinentry-mode loopback --passphrase-fd 0 \
+            --output "$ENCRYPTED" "$DUMP"
+
+          test -s "$ENCRYPTED"
+          echo "Backup terenkripsi dibuat: $ENCRYPTED"
+
+      - name: Simpan artifact backup
+        uses: actions/upload-artifact@v4
+        with:
+          name: supabase-backup-${{ github.run_id }}
+          path: .backups/*.gpg
+          retention-days: 30
+          if-no-files-found: error
+          include-hidden-files: true
+
+      - name: Generate Prisma Client
+        env:
+          DIRECT_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
+        run: pnpm db:generate
+
+      - name: Migrasi Supabase
+        env:
+          DIRECT_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
+        run: pnpm db:migrate
+
+      - name: Status migrasi
+        env:
+          DIRECT_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
+        run: pnpm --filter @rentalio/database migrate:status
+
+      - name: Trigger deploy API dan tunggu readiness
+        if: ${{ inputs.deploy }}
+        env:
+          API_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK_API }}
+          API_HEALTH_URL: ${{ secrets.API_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error -X POST "$API_HOOK" >/dev/null
+
+          for attempt in $(seq 1 120); do
+            if curl --fail --silent "$API_HEALTH_URL" | jq -e '.status == "ok"' >/dev/null 2>&1; then
+              echo "API sehat setelah ${attempt} percobaan."
+              exit 0
+            fi
+            sleep 10
+          done
+
+          echo "::error::API belum sehat setelah 20 menit; web/admin tidak dideploy."
+          exit 1
+
+      - name: Trigger deploy web dan admin
+        if: ${{ inputs.deploy }}
+        env:
+          WEB_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK_WEB }}
+          ADMIN_HOOK: ${{ secrets.VERCEL_DEPLOY_HOOK_ADMIN }}
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error -X POST "$WEB_HOOK" >/dev/null
+          curl --fail-with-body --silent --show-error -X POST "$ADMIN_HOOK" >/dev/null
+          echo "Deploy web dan admin sudah diantrekan."
+
+      - name: Ringkasan
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+          DEPLOY_ENABLED: ${{ inputs.deploy }}
+        run: |
+          {
+            echo "### Production release"
+            echo "- Commit: \`$COMMIT_SHA\`"
+            echo "- Deploy Vercel: $DEPLOY_ENABLED"
+          } >> "$GITHUB_STEP_SUMMARY"

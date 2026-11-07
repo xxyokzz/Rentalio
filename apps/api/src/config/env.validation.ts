@@ -7,6 +7,8 @@ export interface AppConfig {
   NODE_ENV: 'development' | 'test' | 'production';
   PORT: number;
   DATABASE_URL: string;
+  /** Ukuran maksimum pool pg per instance (serverless: kecilkan, mis. 1). */
+  DATABASE_POOL_MAX: number;
   /** Pepper HMAC untuk hash OTP/token. Bukan salt per-record; wajib >= 32 char. */
   HMAC_PEPPER: string;
   /** Public origin of the separate Admin Platform application; exact Origin validation for admin CSRF. */
@@ -35,6 +37,19 @@ export interface AppConfig {
   RESEND_OTP_TEMPLATE?: string;
   /** Base URL publik aplikasi (untuk tautan reset password). */
   APP_BASE_URL: string;
+  /**
+   * Secret Vercel Cron. Kosong = endpoint /internal/cron menolak semua request.
+   * Vercel mengirim `Authorization: Bearer <CRON_SECRET>`.
+   */
+  CRON_SECRET?: string;
+  /** Token endpoint status cron; kosong = fallback ke CRON_SECRET. */
+  CRON_STATUS_TOKEN?: string;
+  /** Penerima alert kegagalan cron; kosong = fallback PLATFORM_OPERATOR_EMAIL. */
+  CRON_ALERT_EMAIL?: string;
+  /** Jeda minimum antar-alert kegagalan cron (detik). */
+  CRON_ALERT_COOLDOWN_SECONDS: number;
+  /** Umur maksimum run terakhir sebelum status dianggap stale (detik). */
+  CRON_STALE_AFTER_SECONDS: number;
   /**
    * Pengali batas rate limit (default 1 = angka kontrak auth).
    * Dokumen 10: "Ambang maksimum request per jangka waktu ... merupakan
@@ -197,6 +212,23 @@ export function validateConfig(env: NodeJS.ProcessEnv): AppConfig {
     return value;
   };
 
+  // Vercel menjalankan banyak instance function; pool per instance harus kecil
+  // karena Supabase transaction pooler yang membagi koneksi ke Postgres.
+  const databasePoolMax = intEnv('DATABASE_POOL_MAX', 10, 1, 50);
+  const cronSecret = env.CRON_SECRET?.trim() || undefined;
+  const cronStatusToken = env.CRON_STATUS_TOKEN?.trim() || undefined;
+  const cronAlertEmail = env.CRON_ALERT_EMAIL?.trim() || undefined;
+  if (cronAlertEmail && !/^[^@\s]+@[^@\s]+$/.test(cronAlertEmail)) {
+    throw new ConfigError('CRON_ALERT_EMAIL harus berupa alamat email yang valid.');
+  }
+  const cronAlertCooldownSeconds = intEnv(
+    'CRON_ALERT_COOLDOWN_SECONDS',
+    3_600,
+    60,
+    86_400,
+  );
+  const cronStaleAfterSeconds = intEnv('CRON_STALE_AFTER_SECONDS', 300, 60, 86_400);
+
   const outboxWorkerEnabled = env.OUTBOX_WORKER_ENABLED === 'true';
   const outboxPollIntervalMs = intEnv('OUTBOX_POLL_INTERVAL_MS', 5_000, 100, 3_600_000);
   const outboxBatchSize = intEnv('OUTBOX_BATCH_SIZE', 20, 1, 500);
@@ -270,6 +302,7 @@ export function validateConfig(env: NodeJS.ProcessEnv): AppConfig {
     NODE_ENV: nodeEnv,
     PORT: port,
     DATABASE_URL: env.DATABASE_URL!,
+    DATABASE_POOL_MAX: databasePoolMax,
     HMAC_PEPPER: pepper,
     COOKIE_SECURE:
       env.COOKIE_SECURE != null
@@ -283,6 +316,11 @@ export function validateConfig(env: NodeJS.ProcessEnv): AppConfig {
     APP_BASE_URL: env.APP_BASE_URL ?? 'http://localhost:3001',
     PLATFORM_ADMIN_BASE_URL: platformAdminBaseUrl,
     PLATFORM_ADMIN_ENCRYPTION_KEY: adminEncryptionKeyText ?? Buffer.alloc(32).toString('base64'),
+    CRON_SECRET: cronSecret,
+    CRON_STATUS_TOKEN: cronStatusToken,
+    CRON_ALERT_EMAIL: cronAlertEmail,
+    CRON_ALERT_COOLDOWN_SECONDS: cronAlertCooldownSeconds,
+    CRON_STALE_AFTER_SECONDS: cronStaleAfterSeconds,
     RATE_LIMIT_SCALE: rateLimitScale,
     OUTBOX_WORKER_ENABLED: outboxWorkerEnabled,
     OUTBOX_POLL_INTERVAL_MS: outboxPollIntervalMs,

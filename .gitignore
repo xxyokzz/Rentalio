@@ -5,6 +5,9 @@
 .env.*
 !.env.example
 
+# Salinan SQL bootstrap yang sudah berisi password asli (jangan di-commit)
+database/sql/*.local.sql
+
 # ============================================================
 # Node & build output
 # ============================================================

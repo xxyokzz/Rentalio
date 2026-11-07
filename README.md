@@ -167,6 +167,24 @@ RESEND_E2E=1 pnpm --filter @rentalio/api test:e2e:resend
 
 Tanpa `RESEND_E2E=1` suite itu dilewati, sehingga `pnpm test` tetap offline.
 
+## Deploy (Supabase + Vercel)
+
+Panduan lengkap: [`docs/deploy-supabase-vercel.md`](docs/deploy-supabase-vercel.md).
+Checklist rilis: [`docs/deploy-production-checklist.md`](docs/deploy-production-checklist.md).
+
+Ringkas: database di Supabase (runtime `sewain_dev` lewat transaction pooler,
+migrasi `sewain_migrator` lewat session pooler), aplikasi di Vercel sebagai tiga
+project (`apps/api`, `apps/web`, `apps/admin`). Worker periodik dijalankan
+lewat endpoint cron `/api/v1/internal/cron` yang dilindungi `CRON_SECRET`.
+Repo tidak mendaftarkan `crons` karena target Vercel Hobby; panggil endpoint
+dari scheduler eksternal atau jalankan worker terpisah. Cron per menit di
+`vercel.json` hanya untuk Vercel Pro.
+
+Release production memakai workflow manual
+`.github/workflows/deploy-production.yml`: backup Supabase, migrasi, lalu
+trigger Deploy Hook Vercel. Auto-deploy branch production dimatikan di
+`vercel.json` agar build tidak mendahului migrasi.
+
 ## Menjalankan migrasi
 
 ```bash
@@ -182,7 +200,7 @@ DATABASE_URL=postgresql://sewain_migrator@localhost:5432/sewain_dev \
   pnpm db:migrate
 ```
 
-Tiga puluh satu migrasi (dijalankan berurutan dari database kosong):
+Tiga puluh dua migrasi (dijalankan berurutan dari database kosong):
 
 1. `20261014181659_init` — tabel dari schema Prisma.
 2. `20261015011000_rls_constraints_triggers` — SQL khusus PostgreSQL
@@ -303,6 +321,10 @@ Tiga puluh satu migrasi (dijalankan berurutan dari database kosong):
     (trigger menolak UPDATE/DELETE), sehingga `ON DELETE SET NULL` pada FK
     membuat penghapusan admin gagal `P0001`. Jejak audit kini tetap utuh tanpa
     FK, dan akun admin dapat dibersihkan secara operasional.
+32. `20261105090000_cron_runs` — tabel `cron_runs` (platform-level, tanpa
+    tenant) untuk riwayat eksekusi cron Vercel: status
+    `SUCCEEDED`/`PARTIAL`/`FAILED`, hasil per job, durasi, dan waktu alert.
+    Dipakai endpoint status dan alerting; retensi 14 hari.
 
 ### Penegakan di tingkat database
 
