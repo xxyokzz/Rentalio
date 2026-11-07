@@ -303,6 +303,9 @@ center, dan promo **belum** termasuk.
    RBAC/CLI/bootstrap dan **direktori tenant read-only** sudah ada (lihat
    pembaruan 29 Okt 2026). Yang belum: aplikasi `admin.rentalio.my.id`, direktori
    akun, announcement center, promo, dan dashboard.
+   Per 3 Nov 2026 sudah ada juga: halaman admin & role, suspend/reactivate tenant,
+   audit viewer, dan settle tagihan QRIS. Rincian gap dan urutan task ada di
+   [`docs/admin-platform-backlog.md`](./admin-platform-backlog.md).
 3. **Manajemen domain kustom** — `GET/POST /tenants/:id/domains`,
    `POST /domains/:id/verify`, status domain, instruksi DNS, TLS.
 4. **Pemeriksaan kerusakan & denda (dokumen 15)** — `damage_inspection_enabled`,
