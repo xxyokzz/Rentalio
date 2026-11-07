@@ -14,7 +14,8 @@ import {
 } from "@/shared/labels";
 import { formatDateTime, formatDuration, shortId } from "@/shared/format";
 import { Pagination } from "@/shared/ui/pagination";
-import { EmptyState, ErrorPanel } from "@/shared/ui/states";
+import { ErrorPanel } from "@/shared/ui/states";
+import { CronEmptyState } from "@/features/cron/cron-empty-state";
 
 export const metadata: Metadata = { title: "Cron" };
 export const dynamic = "force-dynamic";
@@ -92,9 +93,7 @@ export default async function CronPage({ searchParams }: { searchParams: Promise
         <div className="panel">
           <div className="panel__body panel__body--flush">
             {result.data.length === 0 ? (
-              <EmptyState title="Belum ada run cron yang cocok">
-                <p className="subtle">Ubah filter status atau tunggu jadwal cron berikutnya.</p>
-              </EmptyState>
+              <CronEmptyState status={status} />
             ) : (
               <div className="table-wrap">
                 <table className="table">
@@ -157,13 +156,15 @@ export default async function CronPage({ searchParams }: { searchParams: Promise
                 </table>
               </div>
             )}
-            <Pagination
-              page={result.page}
-              pageSize={result.pageSize}
-              total={result.total}
-              basePath="/cron"
-              query={query}
-            />
+            {result.data.length > 0 ? (
+              <Pagination
+                page={result.page}
+                pageSize={result.pageSize}
+                total={result.total}
+                basePath="/cron"
+                query={query}
+              />
+            ) : null}
           </div>
         </div>
       ) : null}
