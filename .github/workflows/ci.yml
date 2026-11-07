@@ -10,6 +10,12 @@
 #   5. pnpm test              — unit + integration terhadap PostgreSQL 18 sungguhan
 #                               (globalSetup membangun schema dari database kosong)
 #
+# Prasyarat Gate 2: Prisma client dan `dist` paket database di-generate lebih
+# dulu. Keduanya di-gitignore, jadi runner bersih tidak memilikinya, sedangkan
+# `@rentalio/database` mengekspor tipe dari `dist/index.d.ts` — tanpa langkah
+# ini typecheck apps/api berhenti dengan TS2307 "Cannot find module
+# '@rentalio/database'".
+#
 # Dependensi lockfile dikunci via `pnpm install --frozen-lockfile`; versi Node
 # dibaca dari `.node-version` dan pnpm dari `packageManager` — jangan diduplikasi
 # di berkas ini.
@@ -91,6 +97,20 @@ jobs:
 
       - name: Gate 1 — validasi kontrak OpenAPI
         run: pnpm openapi:validate
+
+      # `prisma generate` menulis client ke database/src/generated, lalu tsc
+      # mengompilasi paket menjadi dist/index.d.ts. Keduanya di-gitignore dan
+      # belum ada di runner, jadi harus dibuat sebelum Gate 2 me-resolve tipe
+      # `@rentalio/database` dari apps/api.
+      - name: Siapkan Prisma client & build paket database
+        run: |
+          pnpm db:generate
+          pnpm --filter @rentalio/database build
+        env:
+          # Generate tidak menyambung ke database, tetapi prisma.config.ts
+          # mewajibkan URL teresolusi (DIRECT_URL kosong di CI). Nilainya sama
+          # dengan database test pada Gate 5.
+          DATABASE_URL: postgresql://sewain_dev@localhost:5432/sewain_test?schema=public
 
       - name: Gate 2 — typecheck
         run: pnpm typecheck
