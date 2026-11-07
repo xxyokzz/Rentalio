@@ -2,7 +2,8 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { adminApi, describeRequestError } from "@/shared/api/client";
+import { adminApi, describeRequestError, isReauthenticationRequired } from "@/shared/api/client";
+import { ReauthPrompt } from "@/features/auth/reauth-prompt";
 import { PLATFORM_ROLES } from "@/shared/labels";
 
 interface RoleActionsProps {
@@ -22,12 +23,16 @@ export function RoleActions({ adminId, permissions }: RoleActionsProps) {
   const [busy, setBusy] = useState<"assign" | "revoke" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [reauthNeeded, setReauthNeeded] = useState(false);
+  // Aksi yang tertunda menunggu verifikasi ulang (assign atau revoke).
+  const [pendingAction, setPendingAction] = useState<"assign" | "revoke">("assign");
 
   const canAssign = permissions.includes("platform.roles.assign");
   const canRevoke = permissions.includes("platform.roles.revoke");
   const ready = reason.trim().length >= 10 && roleCode !== "";
 
   async function run(action: "assign" | "revoke") {
+    setPendingAction(action);
     setBusy(action);
     setError(null);
     setNotice(null);
@@ -39,10 +44,13 @@ export function RoleActions({ adminId, permissions }: RoleActionsProps) {
           ? `Role ${roleCode} ditugaskan dan dicatat pada audit.`
           : `Role ${roleCode} dicabut dan dicatat pada audit.`,
       );
+      setReauthNeeded(false);
       setReason("");
       router.refresh();
     } catch (caught) {
-      setError(describeRequestError(caught));
+      // Assign/revoke juga tindakan berisiko: API meminta re-auth yang segar.
+      if (isReauthenticationRequired(caught)) setReauthNeeded(true);
+      else setError(describeRequestError(caught));
     } finally {
       setBusy(null);
     }
@@ -122,6 +130,16 @@ export function RoleActions({ adminId, permissions }: RoleActionsProps) {
             />
             <span className="hint">{reason.trim().length}/500 karakter (minimal 10).</span>
           </div>
+          {reauthNeeded ? (
+            <ReauthPrompt
+              actionLabel={pendingAction === "revoke" ? "mencabut role" : "menugaskan role"}
+              onVerified={() => {
+                setReauthNeeded(false);
+                void run(pendingAction);
+              }}
+              onCancel={() => setReauthNeeded(false)}
+            />
+          ) : null}
           <div className="form-row">
             {canAssign ? (
               <button className="btn btn--primary" type="submit" disabled={busy !== null || !ready}>

@@ -1568,3 +1568,222 @@ describe('direktori Admin Platform', () => {
     }
   });
 });
+
+/**
+ * Re-authentication Admin Platform (tindakan berisiko).
+ *
+ * Endpoint baru hanya bernilai kalau tiga lapis pengamannya terbukti di HTTP
+ * nyata: CSRF admin (Origin persis + token terikat sesi), proteksi replay TOTP
+ * (langkah waktu tidak boleh dipakai dua kali), dan rate limit per sesi.
+ * Guard recent-auth juga dibuktikan benar-benar menggerbangi endpoint berisiko:
+ * sesi tua ditolak, lalu lolos setelah re-authentication berhasil.
+ */
+describe('re-authentication Admin Platform', () => {
+  const ROLE_CODE = `PLATFORM_REAUTH_${Date.now()}`;
+  const REAUTH_PASSWORD = 'kata-sandi-reauth-admin-123';
+  const reauthEmail = `reauth-admin-${Date.now()}@rentalio.my.id`;
+  const UNKNOWN_TENANT = '88888888-8888-4888-8888-888888888888';
+
+  let cookie = '';
+  let csrf = '';
+  let secret = '';
+  let sessionId = '';
+  let usedStep = 0;
+  let appConfig: { RATE_LIMIT_SCALE: number };
+
+  const currentStep = (): number => Math.floor(Date.now() / TOTP_STEP_MS);
+
+  /** Bucket rate limit dipakai bersama seluruh suite; kosongkan sebelum diuji. */
+  async function clearReauthRateLimits(): Promise<void> {
+    await prisma.client.rateLimitCounter.deleteMany({});
+  }
+
+  function reauth(
+    body: Record<string, unknown>,
+    options: { origin?: string | null; csrf?: string | null; cookie?: string | null } = {},
+  ) {
+    const origin = options.origin === undefined ? ADMIN_ORIGIN : options.origin;
+    const token = options.csrf === undefined ? csrf : options.csrf;
+    const session = options.cookie === undefined ? cookie : options.cookie;
+    let call = request(server).post(`${API}/platform-admin/auth/reauth`);
+    if (session) call = call.set('Cookie', session);
+    if (token) call = call.set('X-Platform-Admin-CSRF', token);
+    if (origin) call = call.set('Origin', origin);
+    return call.send(body);
+  }
+
+  beforeAll(async () => {
+    const permissions = await prisma.client.platformPermission.findMany({
+      where: { code: { in: ['platform.tenants.list', 'platform.tenants.suspend'] } },
+      select: { id: true },
+    });
+    expect(permissions).toHaveLength(2);
+
+    const role = await prisma.client.platformRole.create({
+      data: {
+        code: ROLE_CODE,
+        name: 'Role uji re-authentication',
+        permissions: {
+          create: permissions.map((permission) => ({ permissionId: permission.id })),
+        },
+      },
+    });
+    await createAdminWithRole(reauthEmail, REAUTH_PASSWORD, role.id);
+
+    const first = await request(server)
+      .post(`${API}/platform-admin/auth/login`)
+      .send({ email: reauthEmail, password: REAUTH_PASSWORD });
+    expect(first.status).toBe(200);
+    expect(first.body.status).toBe('MFA_ENROLLMENT_REQUIRED');
+    secret = secretFromProvisioningUri(first.body.challenge.provisioningUri as string);
+
+    const mfa = await request(server)
+      .post(`${API}/platform-admin/auth/mfa`)
+      .send({ challengeToken: first.body.challenge.challengeToken, code: currentTotp(secret) });
+    expect(mfa.status).toBe(200);
+    cookie = adminCookieOf(mfa).split(';')[0];
+    csrf = mfa.body.csrfToken as string;
+
+    const session = await prisma.client.platformAdminSession.findFirst({
+      where: { adminUser: { email: reauthEmail } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!session) throw new Error('sesi re-authentication tidak ditemukan');
+    sessionId = session.id;
+    appConfig = app.get('APP_CONFIG') as { RATE_LIMIT_SCALE: number };
+  });
+
+  it('tanpa cookie sesi ditolak 401', async () => {
+    const res = await reauth(
+      { password: REAUTH_PASSWORD, code: currentTotp(secret) },
+      { cookie: null },
+    );
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('UNAUTHENTICATED');
+  });
+
+  it('tanpa header token CSRF ditolak 403', async () => {
+    const res = await reauth({ password: REAUTH_PASSWORD, code: '123456' }, { csrf: null });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('CSRF_VALIDATION_FAILED');
+  });
+
+  it('Origin selain origin admin ditolak 403', async () => {
+    const res = await reauth(
+      { password: REAUTH_PASSWORD, code: '123456' },
+      { origin: 'http://evil.example.com' },
+    );
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('CSRF_VALIDATION_FAILED');
+  });
+
+  it('password salah 401 dan audit mencatat tahap password', async () => {
+    const res = await reauth({
+      password: 'kata-sandi-salah-reauth',
+      code: currentTotp(secret),
+    });
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('INVALID_CREDENTIALS');
+
+    const event = await prisma.client.platformAuditEvent.findFirst({
+      where: { action: 'PLATFORM_ADMIN_REAUTHENTICATION_FAILED', targetId: sessionId },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect((event?.metadata as Record<string, unknown> | null)?.stage).toBe('password');
+  });
+
+  it('kode TOTP salah 401 dan audit mencatat tahap totp', async () => {
+    const res = await reauth({ password: REAUTH_PASSWORD, code: '000000' });
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('MFA_INVALID_OR_EXPIRED');
+
+    const event = await prisma.client.platformAuditEvent.findFirst({
+      where: { action: 'PLATFORM_ADMIN_REAUTHENTICATION_FAILED', targetId: sessionId },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect((event?.metadata as Record<string, unknown> | null)?.stage).toBe('totp');
+  });
+
+  it('sesi dengan re-auth kedaluwarsa ditolak pada suspend', async () => {
+    await prisma.client.platformAdminSession.update({
+      where: { id: sessionId },
+      data: { reauthenticatedAt: new Date(Date.now() - 11 * 60_000) },
+    });
+    const res = await request(server)
+      .post(`${API}/platform-admin/tenants/${UNKNOWN_TENANT}/suspend`)
+      .set('Cookie', cookie)
+      .set('X-Platform-Admin-CSRF', csrf)
+      .set('Origin', ADMIN_ORIGIN)
+      .send({ reason: 'uji re-auth kedaluwarsa pada tindakan berisiko' });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe('REAUTHENTICATION_REQUIRED');
+  });
+
+  it('password + TOTP benar menyegarkan reauthenticatedAt dan membuka guard', async () => {
+    usedStep = currentStep();
+    // Langkah sebelumnya dianggap sudah dipakai agar kode saat ini sah.
+    await prisma.client.platformAdminUser.update({
+      where: { email: reauthEmail },
+      data: { lastTotpStep: BigInt(usedStep - 1) },
+    });
+
+    const res = await reauth({
+      password: REAUTH_PASSWORD,
+      code: totpCodeForStep(secret, usedStep),
+    });
+    expect(res.status).toBe(200);
+    expect(typeof res.body.data.reauthenticatedAt).toBe('string');
+
+    const session = await prisma.client.platformAdminSession.findUnique({
+      where: { id: sessionId },
+    });
+    expect(session?.reauthenticatedAt?.getTime() ?? 0).toBeGreaterThan(Date.now() - 60_000);
+
+    const event = await prisma.client.platformAuditEvent.findFirst({
+      where: { action: 'PLATFORM_ADMIN_REAUTHENTICATED', targetId: sessionId },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(event).not.toBeNull();
+
+    // Guard yang tadinya menolak kini meloloskan; service lalu menjawab 404.
+    const suspend = await request(server)
+      .post(`${API}/platform-admin/tenants/${UNKNOWN_TENANT}/suspend`)
+      .set('Cookie', cookie)
+      .set('X-Platform-Admin-CSRF', csrf)
+      .set('Origin', ADMIN_ORIGIN)
+      .send({ reason: 'uji guard lolos setelah re-authentication' });
+    expect(suspend.status).toBe(404);
+    expect(suspend.body.error.code).toBe('NOT_FOUND');
+  });
+
+  it('kode TOTP yang sama tidak dapat dipakai dua kali (replay)', async () => {
+    const res = await reauth({
+      password: REAUTH_PASSWORD,
+      code: totpCodeForStep(secret, usedStep),
+    });
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('MFA_INVALID_OR_EXPIRED');
+  });
+
+  it('dibatasi per sesi (5/15 menit) dengan 429 RATE_LIMITED', async () => {
+    const scale = appConfig.RATE_LIMIT_SCALE;
+    appConfig.RATE_LIMIT_SCALE = 1;
+    try {
+      await clearReauthRateLimits();
+      let sawLimit = false;
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        const res = await reauth({ password: 'kata-sandi-salah-reauth', code: '000000' });
+        if (res.status === 429) {
+          expect(res.body.error.code).toBe('RATE_LIMITED');
+          sawLimit = true;
+          break;
+        }
+        expect(res.status).toBe(401);
+      }
+      expect(sawLimit).toBe(true);
+    } finally {
+      appConfig.RATE_LIMIT_SCALE = scale;
+      await clearReauthRateLimits();
+    }
+  });
+});
