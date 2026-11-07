@@ -38,6 +38,14 @@ export function describeRequestError(error: unknown): string {
   return "Terjadi kesalahan tak terduga. Muat ulang halaman lalu coba lagi.";
 }
 
+/**
+ * True bila API menolak aksi karena re-authentication sesi sudah kedaluwarsa.
+ * UI memakai ini untuk meminta password + TOTP lalu mengulang aksi yang sama.
+ */
+export function isReauthenticationRequired(error: unknown): boolean {
+  return error instanceof AdminRequestError && error.code === "REAUTHENTICATION_REQUIRED";
+}
+
 function redirectToLogin(): void {
   if (typeof window === "undefined") return;
   if (window.location.pathname !== "/login") {
@@ -194,6 +202,11 @@ export const adminApi = {
 
   logout(): Promise<void> {
     return send<void>("/platform-admin/session", { method: "DELETE" });
+  },
+
+  /** Segarkan re-authentication sesi (password + TOTP) sebelum tindakan berisiko. */
+  reauthenticate(password: string, code: string): Promise<{ data: { reauthenticatedAt: string } }> {
+    return send("/platform-admin/auth/reauth", { method: "POST", body: { password, code } });
   },
 
   suspendTenant(tenantId: string, reason: string): Promise<unknown> {

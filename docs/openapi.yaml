@@ -2684,6 +2684,72 @@ components:
           type: integer
           minimum: 0
 
+    PlatformCronRunJobState:
+      type: string
+      enum: [ SUCCEEDED, FAILED, UNKNOWN ]
+
+    PlatformCronRun:
+      type: object
+      required: [ id, startedAt, finishedAt, status, durationMs, failedJobs, results, alertedAt, jobs ]
+      description: >-
+        Satu putaran endpoint cron Vercel. `jobs` menurunkan status per job dari `failedJobs` dan `results`; `UNKNOWN` berarti job belum berjalan (mis. worker context gagal sebelum job dimulai). Hasil job hanya berisi hitungan operasional, bukan data tenant.
+      properties:
+        id:
+          type: string
+          format: uuid
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [ SUCCEEDED, PARTIAL, FAILED ]
+        durationMs:
+          type: integer
+          minimum: 0
+        failedJobs:
+          type: array
+          items:
+            type: string
+        results:
+          type: [ object, 'null' ]
+          additionalProperties: true
+          description: Hasil per job (hitungan operasional), bukan data pelanggan.
+        alertedAt:
+          type: [ string, 'null' ]
+          format: date-time
+        jobs:
+          type: object
+          required: [ outbox, subscriptions, billingReminders ]
+          properties:
+            outbox:
+              $ref: '#/components/schemas/PlatformCronRunJobState'
+            subscriptions:
+              $ref: '#/components/schemas/PlatformCronRunJobState'
+            billingReminders:
+              $ref: '#/components/schemas/PlatformCronRunJobState'
+
+    PlatformCronRunPage:
+      type: object
+      required: [ data, page, pageSize, total ]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/PlatformCronRun'
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+
     PlatformTenantStatusChangeRequest:
       type: object
       required: [ reason ]
@@ -7604,6 +7670,63 @@ paths:
         '429':
           $ref: '#/components/responses/RateLimited'
 
+  /platform-admin/auth/reauth:
+    x-implementation-status: implemented
+    post:
+      tags: [ Platform Admin ]
+      operationId: platformAdminReauthenticate
+      x-required-permission: platform_admin
+      security:
+        - platformAdminCookie: []
+      summary: Re-authentication sesi admin (password + TOTP) untuk tindakan berisiko
+      description: >-
+        Menyegarkan `reauthenticatedAt` sesi aktif sebelum tindakan berisiko (suspend/reactivate tenant, assignment role, settle tagihan). Password dan kode TOTP diverifikasi ulang; langkah waktu TOTP yang sudah dipakai login tidak dapat diulang karena `lastTotpStep` bersifat global per akun, sehingga kode yang sama ditolak meski masih berada dalam jendela toleransi. Login MFA penuh sudah dihitung sebagai re-authentication; sesi yang lebih tua dari 10 menit sejak re-auth terakhir dijawab `403 REAUTHENTICATION_REQUIRED` pada endpoint berisiko. Sebagai mutasi berbasis cookie admin, endpoint ini wajib `X-Platform-Admin-CSRF` dan Origin admin yang persis.
+      parameters:
+        - $ref: '#/components/parameters/platformAdminCsrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [ password, code ]
+              additionalProperties: false
+              properties:
+                password:
+                  type: string
+                  maxLength: 256
+                code:
+                  type: string
+                  pattern: '^\\d{6}$'
+      responses:
+        '200':
+          description: Re-authentication berhasil; waktu re-auth baru ada di body
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ data ]
+                properties:
+                  data:
+                    type: object
+                    required: [ reauthenticatedAt ]
+                    properties:
+                      reauthenticatedAt: { type: string, format: date-time }
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          description: Sesi admin tidak valid, password salah, atau kode MFA salah/sudah dipakai
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorBody' }
+        '403':
+          description: Origin admin tidak diizinkan atau token CSRF admin tidak valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorBody' }
+        '429':
+          $ref: '#/components/responses/RateLimited'
+
   /platform-admin/session:
     x-implementation-status: implemented
     get:
@@ -7907,7 +8030,7 @@ paths:
         - platformAdminCookie: []
       summary: Tandai tagihan langganan QRIS lunas — wajib referensi, CSRF admin, dan audit
       description: >-
-        Karena QRIS dinamis tidak memiliki callback pembayaran, hanya tindakan operator ini yang dapat memindahkan tagihan `PENDING` → `PAID`. Endpoint memerlukan permission `platform.subscriptions.settle` (Super Admin dan Billing), CSRF admin, serta Origin admin yang persis. Klaim memakai syarat status `PENDING` sehingga dua operator yang menekan bersamaan hanya memperpanjang langganan **sekali**; percobaan kedua dijawab `409`. Nominal diterima harus >= nilai tagihan. Setiap percobaan (berhasil maupun ditolak) menulis `PLATFORM_SUBSCRIPTION_INVOICE_SETTLED` beserta alasan/referensi.
+        Karena QRIS dinamis tidak memiliki callback pembayaran, hanya tindakan operator ini yang dapat memindahkan tagihan `PENDING` → `PAID`. Endpoint memerlukan permission `platform.subscriptions.settle` (Super Admin dan Billing), CSRF admin, Origin admin yang persis, serta re-authentication yang masih segar: sesi yang `reauthenticatedAt`-nya lebih tua dari 10 menit dijawab `403 REAUTHENTICATION_REQUIRED` dan harus menyegarkannya lewat `POST /platform-admin/auth/reauth`. Klaim memakai syarat status `PENDING` sehingga dua operator yang menekan bersamaan hanya memperpanjang langganan **sekali**; percobaan kedua dijawab `409`. Nominal diterima harus >= nilai tagihan. Setiap percobaan (berhasil maupun ditolak) menulis `PLATFORM_SUBSCRIPTION_INVOICE_SETTLED` beserta alasan/referensi.
       parameters:
         - $ref: '#/components/parameters/tenantId'
         - name: invoiceId
@@ -7949,7 +8072,7 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           description: >-
-            Tidak memiliki `platform.subscriptions.settle`, atau Origin/token CSRF admin tidak valid
+            Tidak memiliki `platform.subscriptions.settle`, Origin/token CSRF admin tidak valid, atau re-authentication sesi sudah kedaluwarsa (`REAUTHENTICATION_REQUIRED`)
           content:
             application/json:
               schema: { $ref: '#/components/schemas/ErrorBody' }
@@ -8051,6 +8174,61 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           description: Sesi admin tidak memiliki `platform.audit.read`
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+
+  /platform-admin/cron-runs:
+    x-implementation-status: implemented
+    get:
+      tags: [ Platform Admin ]
+      operationId: platformAdminListCronRuns
+      x-required-permission: platform.dashboard.read
+      security:
+        - platformAdminCookie: []
+      summary: Riwayat eksekusi cron Vercel beserta status setiap job
+      description: >-
+        Riwayat `cron_runs`, terbaru lebih dulu dengan `id` sebagai tiebreaker agar paginasi stabil. Setiap baris memuat status keseluruhan, durasi, daftar job gagal, hasil per job, dan `jobs` turunan (`SUCCEEDED`/`FAILED`/`UNKNOWN`). `UNKNOWN` berarti job belum berjalan, mis. worker context gagal sebelum job dimulai. Endpoint read-only ini tidak memicu job; akses dibatasi permission `platform.dashboard.read`, sesi admin terverifikasi MFA, dan `Cache-Control: no-store`.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ SUCCEEDED, PARTIAL, FAILED ]
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        '200':
+          description: Halaman riwayat cron
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformCronRunPage'
+        '400':
+          description: Filter status atau paginasi tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Sesi admin tidak memiliki `platform.dashboard.read`
           content:
             application/json:
               schema:

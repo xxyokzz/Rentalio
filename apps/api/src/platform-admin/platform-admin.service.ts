@@ -180,6 +180,114 @@ export class PlatformAdminService {
     return result;
   }
 
+  /**
+   * Re-authentication untuk tindakan berisiko (suspend/reactivate, assignment
+   * role, promo aktif, publish pengumuman, settle tagihan).
+   *
+   * Password dan TOTP diverifikasi ulang terhadap sesi yang sedang aktif.
+   * Langkah TOTP yang sudah dipakai login tidak dapat diulang: `lastTotpStep`
+   * bersifat global per akun, bukan per sesi, sehingga kode yang sama tidak
+   * dapat dipakai dua kali meski berada dalam jendela toleransi.
+   */
+  async reauthenticate(
+    sessionId: string,
+    password: string,
+    code: string,
+    ip: string,
+  ): Promise<{ reauthenticatedAt: Date }> {
+    const ipLimit = await this.rateLimit.consume(
+      { bucket: 'platform.admin.reauth:ip', limit: 10, windowSeconds: 900 },
+      ip,
+    );
+    if (!ipLimit.allowed) throw this.rateLimited(ipLimit.retryAfterSeconds);
+    const sessionLimit = await this.rateLimit.consume(
+      { bucket: 'platform.admin.reauth:session', limit: 5, windowSeconds: 900 },
+      sessionId,
+    );
+    if (!sessionLimit.allowed) throw this.rateLimited(sessionLimit.retryAfterSeconds);
+
+    const now = new Date();
+    const session = await this.prisma.client.platformAdminSession.findUnique({
+      where: { id: sessionId },
+      include: { adminUser: true },
+    });
+    if (
+      !session ||
+      session.revokedAt ||
+      session.idleExpiresAt <= now ||
+      session.absoluteExpiresAt <= now ||
+      session.adminUser.status !== 'ACTIVE' ||
+      !session.adminUser.totpSecretEncrypted
+    ) {
+      throw new ApiError(ErrorCode.UNAUTHENTICATED, 'Sesi Admin Platform tidak valid.');
+    }
+
+    if (!verifyPassword(password, session.adminUser.passwordHash)) {
+      await this.audit(this.prisma.client, {
+        actorAdminId: session.adminUserId,
+        action: 'PLATFORM_ADMIN_REAUTHENTICATION_FAILED',
+        targetType: 'platform_admin_session',
+        targetId: sessionId,
+        outcome: 'DENIED',
+        correlationId: `admin-reauth-${randomUUID()}`,
+        metadata: { stage: 'password' },
+      });
+      throw new ApiError(ErrorCode.INVALID_CREDENTIALS, 'Email atau password salah.');
+    }
+
+    const secret = decryptSecret(this.encryptionKey, session.adminUser.totpSecretEncrypted);
+    const verifiedStep = verifyTotpStep(
+      secret,
+      code,
+      now.getTime(),
+      session.adminUser.lastTotpStep,
+    );
+    if (verifiedStep == null) {
+      await this.audit(this.prisma.client, {
+        actorAdminId: session.adminUserId,
+        action: 'PLATFORM_ADMIN_REAUTHENTICATION_FAILED',
+        targetType: 'platform_admin_session',
+        targetId: sessionId,
+        outcome: 'DENIED',
+        correlationId: `admin-reauth-${randomUUID()}`,
+        metadata: { stage: 'totp' },
+      });
+      throw new ApiError(
+        ErrorCode.MFA_INVALID_OR_EXPIRED,
+        'Kode MFA tidak valid atau sudah dipakai.',
+      );
+    }
+
+    const reauthenticatedAt = await this.prisma.withRetryableTransaction(async (tx) => {
+      const updated = await tx.platformAdminSession.updateMany({
+        where: {
+          id: sessionId,
+          revokedAt: null,
+          idleExpiresAt: { gt: now },
+          absoluteExpiresAt: { gt: now },
+        },
+        data: { reauthenticatedAt: now },
+      });
+      if (updated.count !== 1) return null;
+      await tx.platformAdminUser.update({
+        where: { id: session.adminUserId },
+        data: { lastTotpStep: BigInt(verifiedStep) },
+      });
+      await this.audit(tx, {
+        actorAdminId: session.adminUserId,
+        action: 'PLATFORM_ADMIN_REAUTHENTICATED',
+        targetType: 'platform_admin_session',
+        targetId: sessionId,
+        correlationId: `admin-reauth-${randomUUID()}`,
+      });
+      return now;
+    });
+    if (!reauthenticatedAt) {
+      throw new ApiError(ErrorCode.UNAUTHENTICATED, 'Sesi Admin Platform tidak valid.');
+    }
+    return { reauthenticatedAt };
+  }
+
   async resolveSession(token: string | undefined): Promise<PlatformAdminPrincipal | null> {
     if (!token) return null;
     const now = new Date();
@@ -223,7 +331,7 @@ export class PlatformAdminService {
     const token = randomToken();
     const csrfToken = randomToken();
     const expiresAt = new Date(now.getTime() + SESSION_ABSOLUTE_MS);
-    await tx.platformAdminSession.create({ data: { adminUserId, tokenHash: this.sha256(token), csrfTokenHash: this.sha256(csrfToken), idleExpiresAt: new Date(now.getTime() + SESSION_IDLE_MS), absoluteExpiresAt: expiresAt, mfaAuthenticatedAt: now } });
+    await tx.platformAdminSession.create({ data: { adminUserId, tokenHash: this.sha256(token), csrfTokenHash: this.sha256(csrfToken), idleExpiresAt: new Date(now.getTime() + SESSION_IDLE_MS), absoluteExpiresAt: expiresAt, mfaAuthenticatedAt: now, reauthenticatedAt: now } });
     return { token, csrfToken, expiresAt };
   }
 

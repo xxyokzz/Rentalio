@@ -2,7 +2,8 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
-import { adminApi, describeRequestError } from "@/shared/api/client";
+import { adminApi, describeRequestError, isReauthenticationRequired } from "@/shared/api/client";
+import { ReauthPrompt } from "@/features/auth/reauth-prompt";
 import type { TenantStatus } from "@/shared/api/types";
 
 interface ActionProps {
@@ -21,6 +22,7 @@ export function TenantStatusPanel({ tenantId, status, permissions }: ActionProps
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [reauthNeeded, setReauthNeeded] = useState(false);
 
   const canSuspend = permissions.includes("platform.tenants.suspend");
   const canReactivate = permissions.includes("platform.tenants.reactivate");
@@ -44,8 +46,7 @@ export function TenantStatusPanel({ tenantId, status, permissions }: ActionProps
           ? "Role Anda tidak memiliki izin menangguhkan tenant."
           : null;
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function run() {
     if (!mode) return;
     setBusy(true);
     setError(null);
@@ -56,13 +57,22 @@ export function TenantStatusPanel({ tenantId, status, permissions }: ActionProps
       setNotice(
         mode === "suspend" ? "Tenant ditangguhkan dan dicatat pada audit." : "Tenant diaktifkan kembali.",
       );
+      setReauthNeeded(false);
       setReason("");
       router.refresh();
     } catch (caught) {
-      setError(describeRequestError(caught));
+      // Sesi yang re-auth-nya lebih tua dari 10 menit ditolak API; minta
+      // verifikasi ulang lalu ulangi aksi yang sama tanpa kehilangan isian.
+      if (isReauthenticationRequired(caught)) setReauthNeeded(true);
+      else setError(describeRequestError(caught));
     } finally {
       setBusy(false);
     }
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void run();
   }
 
   return (
@@ -107,19 +117,30 @@ export function TenantStatusPanel({ tenantId, status, permissions }: ActionProps
               />
               <span className="hint">{reason.trim().length}/500 karakter (minimal 10).</span>
             </div>
-            <div className="form-row">
-              <button
-                className={mode === "suspend" ? "btn btn--danger" : "btn btn--primary"}
-                type="submit"
-                disabled={busy || reason.trim().length < 10}
-              >
-                {busy
-                  ? "Memproses…"
-                  : mode === "suspend"
-                    ? "Tangguhkan tenant"
-                    : "Aktifkan kembali tenant"}
-              </button>
-            </div>
+            {reauthNeeded ? (
+              <ReauthPrompt
+                actionLabel={mode === "suspend" ? "menangguhkan tenant" : "mengaktifkan kembali tenant"}
+                onVerified={() => {
+                  setReauthNeeded(false);
+                  void run();
+                }}
+                onCancel={() => setReauthNeeded(false)}
+              />
+            ) : (
+              <div className="form-row">
+                <button
+                  className={mode === "suspend" ? "btn btn--danger" : "btn btn--primary"}
+                  type="submit"
+                  disabled={busy || reason.trim().length < 10}
+                >
+                  {busy
+                    ? "Memproses…"
+                    : mode === "suspend"
+                      ? "Tangguhkan tenant"
+                      : "Aktifkan kembali tenant"}
+                </button>
+              </div>
+            )}
           </form>
         )}
       </div>
@@ -140,6 +161,7 @@ export function SettleInvoicePanel({ tenantId, permissions }: Omit<ActionProps, 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [reauthNeeded, setReauthNeeded] = useState(false);
 
   const allowed = permissions.includes("platform.subscriptions.settle");
 
@@ -159,8 +181,7 @@ export function SettleInvoicePanel({ tenantId, permissions }: Omit<ActionProps, 
     );
   }
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function run() {
     setBusy(true);
     setError(null);
     setNotice(null);
@@ -172,15 +193,23 @@ export function SettleInvoicePanel({ tenantId, permissions }: Omit<ActionProps, 
         reason: reason.trim(),
       });
       setNotice("Tagihan ditandai lunas; langganan diperpanjang dan audit tercatat.");
+      setReauthNeeded(false);
       setInvoiceId("");
       setPaidAmount("");
       setReason("");
       router.refresh();
     } catch (caught) {
-      setError(describeRequestError(caught));
+      // Settle adalah tindakan berisiko: API meminta re-auth yang masih segar.
+      if (isReauthenticationRequired(caught)) setReauthNeeded(true);
+      else setError(describeRequestError(caught));
     } finally {
       setBusy(false);
     }
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    void run();
   }
 
   return (
@@ -263,15 +292,26 @@ export function SettleInvoicePanel({ tenantId, permissions }: Omit<ActionProps, 
               Wajib, minimal 10 karakter. Simpan id mutasi/berita transfer sebagai jejak audit.
             </span>
           </div>
-          <div className="form-row">
-            <button
-              className="btn btn--primary"
-              type="submit"
-              disabled={busy || invoiceId.trim() === "" || reason.trim().length < 10}
-            >
-              {busy ? "Memproses…" : "Tandai lunas"}
-            </button>
-          </div>
+          {reauthNeeded ? (
+            <ReauthPrompt
+              actionLabel="menandai tagihan lunas"
+              onVerified={() => {
+                setReauthNeeded(false);
+                void run();
+              }}
+              onCancel={() => setReauthNeeded(false)}
+            />
+          ) : (
+            <div className="form-row">
+              <button
+                className="btn btn--primary"
+                type="submit"
+                disabled={busy || invoiceId.trim() === "" || reason.trim().length < 10}
+              >
+                {busy ? "Memproses…" : "Tandai lunas"}
+              </button>
+            </div>
+          )}
         </form>
       </div>
     </div>

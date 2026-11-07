@@ -21,6 +21,7 @@ import {
   PlatformAdminCsrfGuard,
   PlatformAdminGuard,
   PlatformPermissionGuard,
+  PlatformRecentAuthGuard,
   RequirePlatformPermission,
   type PlatformAdminPrincipal,
 } from './platform-admin.auth.js';
@@ -28,8 +29,10 @@ import {
   PlatformAdminDirectoryQueryDto,
   PlatformAdminLoginDto,
   PlatformAdminMfaDto,
+  PlatformAdminReauthDto,
   PlatformAdminRecoveryDto,
   PlatformAuditQueryDto,
+  PlatformCronRunQueryDto,
   PlatformRoleAssignmentDto,
   PlatformSubscriptionInvoiceSettleDto,
   PlatformTenantDirectoryQueryDto,
@@ -41,6 +44,7 @@ import { PlatformTenantDirectoryService } from './platform-directory.service.js'
 import { PlatformAuditService } from './platform-audit.service.js';
 import { PlatformRoleAssignmentService } from './platform-roles.service.js';
 import { PlatformBillingService } from './platform-billing.service.js';
+import { PlatformCronService } from './platform-cron.service.js';
 import type { AppConfig } from '../config/env.validation.js';
 
 /**
@@ -48,12 +52,14 @@ import type { AppConfig } from '../config/env.validation.js';
  * POST   /platform-admin/auth/login      password → challenge MFA
  * POST   /platform-admin/auth/mfa        challenge + TOTP → sesi
  * POST   /platform-admin/auth/recovery   challenge + recovery code → sesi
+ * POST   /platform-admin/auth/reauth     password + TOTP → segarkan re-auth sesi
  * GET    /platform-admin/session         principal + permission efektif
  * GET    /platform-admin/csrf            terbitkan token CSRF sesi
  * GET    /platform-admin/tenants         direktori tenant (metadata minimum)
  * GET    /platform-admin/tenants/:id     ringkasan satu tenant (read_summary)
  * POST   /platform-admin/tenants/:id/suspend     suspend + alasan
  * POST   /platform-admin/tenants/:id/reactivate  reactivate + alasan
+ * GET    /platform-admin/cron-runs              riwayat cron + status job (dashboard.read)
  * GET    /platform-admin/audit-events             audit viewer (aktor/aksi/waktu)
  * GET    /platform-admin/admins                daftar admin + role aktif (roles.read)
  * GET    /platform-admin/admins/:adminId       detail admin + role aktif (roles.read)
@@ -75,6 +81,7 @@ export class PlatformAdminController {
     private readonly audit: PlatformAuditService,
     private readonly roleAssignments: PlatformRoleAssignmentService,
     private readonly billing: PlatformBillingService,
+    private readonly cron: PlatformCronService,
     @Inject('APP_CONFIG') private readonly config: AppConfig,
   ) {}
 
@@ -121,6 +128,27 @@ export class PlatformAdminController {
     );
     this.applySessionCookie(res, session);
     return { csrfToken: session.csrfToken, expiresAt: session.expiresAt };
+  }
+
+  @Post('auth/reauth')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(PlatformAdminGuard, PlatformAdminCsrfGuard)
+  @ApiOperation({
+    summary: 'Re-authentication sesi (password + TOTP) untuk tindakan berisiko',
+  })
+  async reauthenticate(
+    @Body() body: PlatformAdminReauthDto,
+    @CurrentPlatformAdmin() principal: PlatformAdminPrincipal,
+    @Req() req: Request,
+  ): Promise<{ data: { reauthenticatedAt: Date } }> {
+    const result = await this.admin.reauthenticate(
+      principal.sessionId,
+      body.password,
+      body.code,
+      req.ip ?? 'unknown',
+    );
+    return { data: result };
   }
 
   @Get('session')
@@ -176,7 +204,12 @@ export class PlatformAdminController {
   @Post('tenants/:tenantId/suspend')
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
-  @UseGuards(PlatformAdminGuard, PlatformPermissionGuard, PlatformAdminCsrfGuard)
+  @UseGuards(
+    PlatformAdminGuard,
+    PlatformPermissionGuard,
+    PlatformAdminCsrfGuard,
+    PlatformRecentAuthGuard,
+  )
   @RequirePlatformPermission('platform.tenants.suspend')
   @ApiOperation({ summary: 'Suspend tenant — wajib alasan, CSRF admin, dan audit' })
   async suspendTenant(
@@ -194,7 +227,12 @@ export class PlatformAdminController {
   @Post('tenants/:tenantId/reactivate')
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
-  @UseGuards(PlatformAdminGuard, PlatformPermissionGuard, PlatformAdminCsrfGuard)
+  @UseGuards(
+    PlatformAdminGuard,
+    PlatformPermissionGuard,
+    PlatformAdminCsrfGuard,
+    PlatformRecentAuthGuard,
+  )
   @RequirePlatformPermission('platform.tenants.reactivate')
   @ApiOperation({ summary: 'Reactivate tenant — wajib alasan, CSRF admin, dan audit' })
   async reactivateTenant(
@@ -212,7 +250,12 @@ export class PlatformAdminController {
   @Post('tenants/:tenantId/subscription-invoices/:invoiceId/settle')
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
-  @UseGuards(PlatformAdminGuard, PlatformPermissionGuard, PlatformAdminCsrfGuard)
+  @UseGuards(
+    PlatformAdminGuard,
+    PlatformPermissionGuard,
+    PlatformAdminCsrfGuard,
+    PlatformRecentAuthGuard,
+  )
   @RequirePlatformPermission('platform.subscriptions.settle')
   @ApiOperation({
     summary: 'Tandai tagihan langganan QRIS lunas — wajib referensi, CSRF admin, dan audit',
@@ -230,6 +273,15 @@ export class PlatformAdminController {
       { paidAmount: body.paidAmount, channel: body.channel, reason: body.reason },
       { adminId: principal.id, correlationId: req.correlationId ?? 'unknown' },
     );
+  }
+
+  @Get('cron-runs')
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(PlatformAdminGuard, PlatformPermissionGuard)
+  @RequirePlatformPermission('platform.dashboard.read')
+  @ApiOperation({ summary: 'Riwayat eksekusi cron Vercel beserta status setiap job' })
+  async listCronRuns(@Query() query: PlatformCronRunQueryDto) {
+    return this.cron.listRuns(query);
   }
 
   @Get('audit-events')
@@ -276,7 +328,12 @@ export class PlatformAdminController {
   @Post('admins/:adminId/roles/assign')
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
-  @UseGuards(PlatformAdminGuard, PlatformPermissionGuard, PlatformAdminCsrfGuard)
+  @UseGuards(
+    PlatformAdminGuard,
+    PlatformPermissionGuard,
+    PlatformAdminCsrfGuard,
+    PlatformRecentAuthGuard,
+  )
   @RequirePlatformPermission('platform.roles.assign')
   @ApiOperation({ summary: 'Tugaskan role Admin Platform — wajib alasan, permission khusus, audit' })
   async assignRole(
@@ -294,7 +351,12 @@ export class PlatformAdminController {
   @Post('admins/:adminId/roles/revoke')
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')
-  @UseGuards(PlatformAdminGuard, PlatformPermissionGuard, PlatformAdminCsrfGuard)
+  @UseGuards(
+    PlatformAdminGuard,
+    PlatformPermissionGuard,
+    PlatformAdminCsrfGuard,
+    PlatformRecentAuthGuard,
+  )
   @RequirePlatformPermission('platform.roles.revoke')
   @ApiOperation({ summary: 'Cabut role Admin Platform — wajib alasan, permission terpisah, audit' })
   async revokeRole(

@@ -58,6 +58,24 @@ export class PlatformAdminRecoveryDto {
   recoveryCode!: string;
 }
 
+/**
+ * Re-authentication untuk tindakan berisiko. Password diverifikasi ulang dan
+ * TOTP harus langkah waktu yang belum pernah dipakai (replay protection),
+ * sehingga sekadar memiliki cookie sesi tidak cukup untuk suspend tenant,
+ * mencabut role, atau menandai tagihan lunas.
+ */
+export class PlatformAdminReauthDto {
+  /** Password akun admin; tidak diberi batas minimum agar tidak membocorkan info. */
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(256)
+  password!: string;
+
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'Kode MFA harus 6 digit.' })
+  code!: string;
+}
+
 /** Status tenant yang boleh difilter (sumber: enum TenantStatus di schema). */
 export const PLATFORM_TENANT_STATUSES = [
   'PENDING_ACTIVATION',
@@ -134,6 +152,29 @@ export class PlatformAuditQueryDto {
   @IsOptional()
   @IsISO8601()
   to?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page: number = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize: number = 20;
+}
+
+/** Status run cron yang boleh difilter admin. */
+export const PLATFORM_CRON_RUN_STATUSES = ['SUCCEEDED', 'PARTIAL', 'FAILED'] as const;
+
+/** Filter riwayat cron: status opsional + paginasi. */
+export class PlatformCronRunQueryDto {
+  @IsOptional()
+  @IsIn(PLATFORM_CRON_RUN_STATUSES)
+  status?: (typeof PLATFORM_CRON_RUN_STATUSES)[number];
 
   @IsOptional()
   @Type(() => Number)

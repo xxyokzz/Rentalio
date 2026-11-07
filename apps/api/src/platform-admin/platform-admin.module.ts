@@ -7,10 +7,12 @@ import { PlatformTenantDirectoryService } from './platform-directory.service.js'
 import { PlatformAuditService } from './platform-audit.service.js';
 import { PlatformRoleAssignmentService } from './platform-roles.service.js';
 import { PlatformBillingService } from './platform-billing.service.js';
+import { PlatformCronService } from './platform-cron.service.js';
 import {
   PlatformAdminCsrfGuard,
   PlatformAdminGuard,
   PlatformPermissionGuard,
+  PlatformRecentAuthGuard,
 } from './platform-admin.auth.js';
 
 /**
@@ -28,9 +30,11 @@ import {
     PlatformAuditService,
     PlatformRoleAssignmentService,
     PlatformBillingService,
+    PlatformCronService,
     PlatformAdminGuard,
     PlatformPermissionGuard,
     PlatformAdminCsrfGuard,
+    PlatformRecentAuthGuard,
   ],
   exports: [PlatformAdminService, PlatformAdminGuard, PlatformPermissionGuard],
 })

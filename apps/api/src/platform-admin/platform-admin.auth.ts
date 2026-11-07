@@ -93,6 +93,36 @@ export class PlatformPermissionGuard implements CanActivate {
 }
 
 /**
+ * Rentang waktu (ms) sejak re-authentication terakhir yang masih dianggap
+ * "baru" untuk tindakan berisiko. Login MFA penuh menghitung sebagai
+ * re-authentication, jadi operator tidak diminta dua kali saat baru masuk.
+ */
+export const REAUTH_WINDOW_MS = 10 * 60_000;
+
+/**
+ * Wajibkan re-authentication (password + TOTP) yang masih segar untuk tindakan
+ * berisiko. Tanpa ini, session yang ditinggal terbuka dapat dipakai menekan
+ * tombol destruktif tanpa membuktikan kehadiran operator.
+ */
+@Injectable()
+export class PlatformRecentAuthGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const principal = context.switchToHttp().getRequest<Request>().platformAdmin;
+    if (!principal) {
+      throw new ApiError(ErrorCode.UNAUTHENTICATED, 'Sesi Admin Platform diperlukan.');
+    }
+    const at = principal.reauthenticatedAt;
+    if (!at || Date.now() - at.getTime() > REAUTH_WINDOW_MS) {
+      throw new ApiError(
+        ErrorCode.REAUTHENTICATION_REQUIRED,
+        'Tindakan ini memerlukan re-authentication. Verifikasi ulang password dan kode MFA.',
+      );
+    }
+    return true;
+  }
+}
+
+/**
  * CSRF untuk mutasi berbasis cookie admin: Origin harus persis sama dengan
  * origin Admin Platform yang dikonfigurasi (bukan sekadar ada di allowlist
  * CORS), dan token harus cocok dengan hash terikat sesi.

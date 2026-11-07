@@ -30,6 +30,9 @@ export function describeApiError(failure: ApiFailure): string {
   if (failure.code === "INVALID_CREDENTIALS") {
     return "Email atau password salah.";
   }
+  if (failure.code === "REAUTHENTICATION_REQUIRED") {
+    return "Sesi perlu diverifikasi ulang sebelum tindakan ini. Masukkan password dan kode MFA.";
+  }
   if (failure.code === "PERMISSION_DENIED") {
     return "Role Anda tidak memiliki izin untuk tindakan ini.";
   }
