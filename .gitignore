@@ -4,6 +4,8 @@
 .env
 .env.*
 !.env.example
+# Token Cloudflare lokal untuk operasi DNS (jangan pernah di-commit)
+cloudflare-token.txt
 
 # Salinan SQL bootstrap yang sudah berisi password asli (jangan di-commit)
 database/sql/*.local.sql
