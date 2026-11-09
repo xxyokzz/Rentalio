@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { describeApiError, isApiRequestError } from "@/shared/api/errors";
 import { useSession } from "@/shared/auth/session";
 import { currentTenantSlug, tenantHostRedirect } from "@/shared/config/tenant-host";
@@ -14,12 +14,24 @@ import { AuthCard } from "./auth-card";
 
 export function LoginForm({ next, verified }: { next?: string; verified?: boolean }) {
   const router = useRouter();
-  const { signIn, selectTenant } = useSession();
+  const { status, tenants, signIn, selectTenant } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Sesi yang sudah aktif tidak perlu mengisi form lagi: lanjutkan langsung di
+  // subdomain tenant akun (dipakai saat `/app` di domain platform dialihkan ke
+  // halaman masuk).
+  useEffect(() => {
+    if (status !== "authenticated") return;
+    const ownSlug = tenants[0]?.slug;
+    if (!ownSlug) return;
+    const target = next && next.startsWith("/") ? next : "/app";
+    const tenantTarget = tenantHostRedirect(ownSlug, target, "");
+    if (tenantTarget) window.location.replace(tenantTarget);
+  }, [next, status, tenants]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
