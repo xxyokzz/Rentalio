@@ -189,6 +189,8 @@ kontrol keamanan: backend tetap memeriksa membership, status tenant, dan permiss
   suite portabel di mesin lain dan CI — tidak ada path absolut di spec.
 - **CI menjalankan suite ini sebagai Gate 6** (`.github/workflows/ci.yml`): `pnpm qa:seed:e2e`
   menambah fixture ke database test, API dijalankan dari `dist`, lalu `--project=desktop` diuji.
+  Browser Chromium di-cache antar run dengan key berisi versi Playwright, jadi unduhan ±170 MB hanya
+  terjadi saat versi itu berubah atau cache kedaluwarsa.
   Saat gagal, laporan HTML, trace/screenshot (`apps/web/playwright-report`, `apps/web/test-results`),
   dan log API (`.dev-logs/api-e2e.log`) diunggah sebagai artefak `e2e-artefak`.
 - `audit_all_features.spec.ts` lulus penuh (13 titik, desktop + mobile). Assertion status langganan

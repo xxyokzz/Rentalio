@@ -166,10 +166,34 @@ jobs:
           # Hanya untuk CI: pepper >= 32 karakter, bukan rahasia produksi.
           HMAC_PEPPER: ci-e2e-hmac-pepper-bukan-rahasia-produksi
 
+      # Cache browser Playwright (~170 MB Chromium) antar run. Key memakai versi
+      # Playwright, bukan hash lockfile: perubahan dependensi lain tidak perlu
+      # membatalkan cache, sedangkan menaikkan Playwright otomatis membuat key baru
+      # sehingga binari lama tidak pernah dipakai bersama versi paket yang berbeda.
+      - name: Baca versi Playwright
+        id: pw
+        run: echo "version=$(pnpm --filter @rentalio/web exec playwright --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      - name: Cache browser Playwright
+        id: pw-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}-chromium
+          restore-keys: |
+            playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}-
+
+      # Dependency sistem (libnss3, fonts, dsb.) tetap dipasang tiap run karena
+      # image runner bisa berubah; biayanya kecil dibanding unduhan browser.
+      - name: Dependency sistem Playwright
+        run: pnpm --filter @rentalio/web exec playwright install-deps chromium
+
+      - name: Pasang Chromium (hanya saat cache miss)
+        if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @rentalio/web exec playwright install chromium
+
       - name: Gate 6 — e2e Playwright (desktop)
-        run: |
-          pnpm --filter @rentalio/web exec playwright install --with-deps chromium
-          pnpm --filter @rentalio/web test:e2e --project=desktop
+        run: pnpm --filter @rentalio/web test:e2e --project=desktop
 
       # Laporan HTML, trace/screenshot Playwright, dan log API ikut diunggah agar
       # kegagalan e2e bisa didiagnosis tanpa menjalankan ulang di mesin lokal.
