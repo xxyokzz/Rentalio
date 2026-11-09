@@ -9,6 +9,8 @@
 #   4. pnpm build             — tsc build semua package
 #   5. pnpm test              — unit + integration terhadap PostgreSQL 18 sungguhan
 #                               (globalSetup membangun schema dari database kosong)
+#   6. Playwright e2e         — UI desktop terhadap API + web yang berjalan sungguhan,
+#                               memakai fixture dari `pnpm qa:seed:e2e`
 #
 # Prasyarat Gate 2: Prisma client dan `dist` paket database di-generate lebih
 # dulu. Keduanya di-gitignore, jadi runner bersih tidak memilikinya, sedangkan
@@ -42,7 +44,7 @@ concurrency:
 
 jobs:
   quality-gates:
-    name: Gate kualitas — openapi, typecheck, lint, build, test
+    name: Gate kualitas — openapi, typecheck, lint, build, test, e2e
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -129,3 +131,56 @@ jobs:
         env:
           MIGRATOR_TEST_URL: postgresql://sewain_migrator@localhost:5432/sewain_test
           DATABASE_URL: postgresql://sewain_dev@localhost:5432/sewain_test?schema=public
+
+      # Gate 6 — e2e UI. Schema sudah dimigrasikan Gate 5 (globalSetup), jadi langkah
+      # ini hanya menambah fixture: akun demo, tenant `demo-sewa`, katalog, dan
+      # langganan ACTIVE (tanpa itu simpan draf katalog ditolak 403 TENANT_RESTRICTED).
+      # API dijalankan dari `dist` hasil Gate 4; web dev server dikelola Playwright
+      # lewat `webServer` di playwright.config.ts (port 3001).
+      #
+      # EMAIL_PROVIDER=in-memory membuat `apps/api/.dev-mailbox/outbox.jsonl` tidak ada,
+      # sehingga `billing_qris.spec.ts` melewati dirinya sendiri alih-alih menguji alur
+      # QRIS yang butuh konfigurasi provider. NODE_ENV=test hanya untuk proses API ini;
+      # langkah Playwright sengaja tanpa NODE_ENV agar `next dev` berjalan normal.
+      - name: Gate 6 — siapkan fixture & API untuk e2e
+        run: |
+          mkdir -p .dev-logs
+          pnpm qa:seed:e2e
+          # nohup + stdin /dev/null agar proses latar tidak menahan langkah ini.
+          (cd apps/api && nohup node dist/main.js > ../../.dev-logs/api-e2e.log 2>&1 < /dev/null &)
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/api/v1/health/ready > /dev/null; then
+              echo "API e2e siap"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API e2e tidak siap dalam 60 detik" >&2
+          tail -50 .dev-logs/api-e2e.log >&2
+          exit 1
+        env:
+          DATABASE_URL: postgresql://sewain_dev@localhost:5432/sewain_test?schema=public
+          NODE_ENV: test
+          PORT: 3000
+          EMAIL_PROVIDER: in-memory
+          # Hanya untuk CI: pepper >= 32 karakter, bukan rahasia produksi.
+          HMAC_PEPPER: ci-e2e-hmac-pepper-bukan-rahasia-produksi
+
+      - name: Gate 6 — e2e Playwright (desktop)
+        run: |
+          pnpm --filter @rentalio/web exec playwright install --with-deps chromium
+          pnpm --filter @rentalio/web test:e2e --project=desktop
+
+      # Laporan HTML, trace/screenshot Playwright, dan log API ikut diunggah agar
+      # kegagalan e2e bisa didiagnosis tanpa menjalankan ulang di mesin lokal.
+      - name: Unggah artefak e2e (hanya saat gagal)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artefak
+          path: |
+            apps/web/playwright-report
+            apps/web/test-results
+            .dev-logs/api-e2e.log
+          if-no-files-found: ignore
+          retention-days: 7

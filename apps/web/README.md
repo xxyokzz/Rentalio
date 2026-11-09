@@ -187,6 +187,10 @@ kontrol keamanan: backend tetap memeriksa membership, status tenant, dan permiss
   ulang password fixture bila hash lama tidak cocok. Jalankan setelah `pnpm --filter @rentalio/database build`.
 - **Artefak tes ditulis ke `test-results/`** melalui `testInfo.outputPath()` (git-ignored), sehingga
   suite portabel di mesin lain dan CI — tidak ada path absolut di spec.
+- **CI menjalankan suite ini sebagai Gate 6** (`.github/workflows/ci.yml`): `pnpm qa:seed:e2e`
+  menambah fixture ke database test, API dijalankan dari `dist`, lalu `--project=desktop` diuji.
+  Saat gagal, laporan HTML, trace/screenshot (`apps/web/playwright-report`, `apps/web/test-results`),
+  dan log API (`.dev-logs/api-e2e.log`) diunggah sebagai artefak `e2e-artefak`.
 - `audit_all_features.spec.ts` lulus penuh (13 titik, desktop + mobile). Assertion status langganan
   di sidebar menerima salah satu state yang dikenal — `Coba gratis N hari lagi`, `Masa coba habis
   hari ini`, `Paket aktif`, `Toko ditangguhkan` — bukan satu nilai tetap, sehingga tur tidak patah

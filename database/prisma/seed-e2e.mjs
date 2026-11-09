@@ -159,10 +159,19 @@ async function findTenantId(userId) {
 
 /** 3. Tenant + membership OWNER + subscription ACTIVE, semua dalam satu konteks. */
 async function ensureTenantAndSubscription(userId, existingTenantId) {
-  const plan = await prisma.plan.findFirst({
+  // Plan platform `free` dipasang migration `20261027130000_default_platform_plan`.
+  // Bila database test sudah direset tetapi baris itu hilang, buat ulang di sini
+  // (idempoten, sama seperti `database/prisma/seed.mjs`) agar seed tidak gagal.
+  let plan = await prisma.plan.findFirst({
     where: { tenantId: null, code: 'free', isActive: true },
     select: { id: true },
   });
+  if (!plan && !dryRun) {
+    plan = await prisma.plan.create({
+      data: { tenantId: null, code: 'free', name: 'Free', priceAmount: 0n, currency: 'IDR', isActive: true },
+      select: { id: true },
+    });
+  }
   if (!plan) {
     throw new Error('Plan platform `free` tidak ada — jalankan migrasi/seeding database lebih dulu.');
   }
