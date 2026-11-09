@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { CatalogPage } from "@/features/catalog/catalog-page";
-import { PublicShell } from "@/shared/layout/public-shell";
+import { notFound, redirect } from "next/navigation";
+import { isTenantSlug, tenantCatalogUrl } from "@/shared/config/hosts";
 
 export async function generateMetadata({
   params,
@@ -9,17 +9,20 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { slug } = await params;
   return {
-    title: `Katalog ${slug}`,
-    description: `Katalog sewa publik ${slug}: produk, tarif, dan pengajuan booking tanpa akun.`,
-    alternates: { canonical: `/t/${slug}/katalog` },
+    title: "Katalog",
+    // URL kanonik katalog adalah host tenant, bukan path platform.
+    alternates: isTenantSlug(slug) ? { canonical: tenantCatalogUrl(slug) } : undefined,
+    robots: { index: false, follow: false },
   };
 }
 
+/**
+ * `/t/{slug}/katalog` tidak lagi menyajikan katalog. Katalog publik hanya hidup
+ * di host tenant (`{slug}.rentalio.my.id/katalog`), jadi setiap tautan lama
+ * dialihkan ke sana.
+ */
 export default async function Page({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
-  return (
-    <PublicShell>
-      <CatalogPage slug={slug} />
-    </PublicShell>
-  );
+  if (!isTenantSlug(slug)) notFound();
+  redirect(tenantCatalogUrl(slug));
 }

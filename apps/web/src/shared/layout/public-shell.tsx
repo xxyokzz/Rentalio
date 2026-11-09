@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 /**
  * Kerangka halaman publik (landing, legal, offline). Katalog tenant sengaja
  * tidak ditautkan dari sini: katalog publik dibuka lewat URL tenant
- * (`/t/{slug}/katalog`), bukan dari halaman marketing.
+ * (`{slug}.rentalio.my.id/katalog`), bukan dari halaman marketing.
  */
 export function PublicShell({ children }: { children: ReactNode }) {
   return (

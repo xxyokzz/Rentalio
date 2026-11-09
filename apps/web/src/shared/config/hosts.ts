@@ -79,6 +79,32 @@ export function slugFromLocalhost(host: string): string | null {
   return SLUG_PATTERN.test(subdomain) ? subdomain : null;
 }
 
+/** Format slug tenant yang sah (dipakai juga saat membangun URL tenant). */
+export function isTenantSlug(value: string): boolean {
+  return SLUG_PATTERN.test(value);
+}
+
+/**
+ * Origin publik tenant: `https://{slug}.{domain platform}`.
+ *
+ * Saat pengembangan domain platform berisi `localhost[:port]`, sehingga origin
+ * memakai skema `http` dan tetap mempertahankan port dev server.
+ */
+export function tenantOrigin(slug: string): string {
+  const root = PLATFORM_ROOT_DOMAIN;
+  const bareRoot = root.replace(/:\d{1,5}$/, "");
+  const scheme = isLocalHost(bareRoot) ? "http" : "https";
+  return `${scheme}://${slug}.${root}`;
+}
+
+/**
+ * URL katalog publik tenant. Katalog hanya disajikan di host tenant, jadi
+ * seluruh tautan (portal, editor, form slug) memakai bentuk ini.
+ */
+export function tenantCatalogUrl(slug: string): string {
+  return `${tenantOrigin(slug)}/katalog`;
+}
+
 /**
  * Host milik platform sendiri (bukan kandidat domain kustom), sehingga tidak
  * perlu lookup ke API.

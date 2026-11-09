@@ -11,6 +11,7 @@ import {
 } from "@/shared/api/endpoints";
 import { describeApiError, isApiRequestError } from "@/shared/api/errors";
 import { useSession } from "@/shared/auth/session";
+import { tenantCatalogUrl } from "@/shared/config/hosts";
 import { Button } from "@/shared/ui/buttons";
 import { TextInput } from "@/shared/ui/form";
 import { Icon } from "@/shared/ui/icons";
@@ -1929,7 +1930,7 @@ export function CatalogEditorPage() {
   };
 
   const enabledBlocks = blocks.filter((b) => b.enabled);
-  const catalogUrl = tenant?.slug ? `/t/${tenant.slug}/katalog` : "/katalog";
+  const catalogUrl = tenant?.slug ? tenantCatalogUrl(tenant.slug) : "/katalog";
   const editingBlock = blocks.find((b) => b.id === editingBlockId);
 
   return (

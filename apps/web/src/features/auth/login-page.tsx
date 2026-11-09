@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
+import { tenantCatalogUrl } from "@/shared/config/hosts";
 import { AuthSplit } from "./auth-split";
 import { LoginForm } from "./login-form";
 
@@ -12,7 +13,7 @@ export function LoginPage({ tenantName, slug }: { tenantName?: string; slug?: st
   const reset = params.get("reset") === "1";
   const invited = params.get("invited") === "1";
 
-  const catalogHref = slug ? `/t/${slug}/katalog` : "/katalog";
+  const catalogHref = slug ? tenantCatalogUrl(slug) : "/katalog";
 
   return (
     <AuthSplit

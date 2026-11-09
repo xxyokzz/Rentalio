@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { billingApi, tenantApi, type SubscriptionInvoice } from "@/shared/api/endpoints";
 import { describeApiError } from "@/shared/api/errors";
 import { useSession } from "@/shared/auth/session";
+import { tenantCatalogUrl } from "@/shared/config/hosts";
 import { formatIDR } from "@/shared/format/currency";
 import { formatDateTime } from "@/shared/format/date";
 import { tenantStatus, trialDaysLeft } from "@/shared/format/status";
@@ -194,10 +195,12 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
                   { term: "Slug", value: <span className="mono">{tenant.slug ?? "—"}</span> },
                   {
                     term: "Link katalog",
-                    value: (
-                      <Link href={`/t/${tenant.slug}/katalog`}>
+                    value: tenant.slug ? (
+                      <Link href={tenantCatalogUrl(tenant.slug)}>
                         {tenant.slug}.rentalio.my.id/katalog
                       </Link>
+                    ) : (
+                      "—"
                     ),
                   },
                   { term: "Zona waktu", value: tenant.timezone ?? "Asia/Jakarta" },

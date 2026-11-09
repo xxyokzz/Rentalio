@@ -72,7 +72,9 @@ test.describe("halaman publik", () => {
       page.getByRole("heading", { name: "Buka katalog toko" }),
     ).toBeVisible();
 
+    // Katalog hanya disajikan di host tenant: path platform dialihkan ke subdomain.
     await page.goto("/t/demo/katalog");
+    await expect(page).toHaveURL(/\/\/demo\.localhost:\d+\/katalog$/);
     await expect(
       page.getByText(/Memuat katalog|Katalog tidak ditemukan|tidak dapat dimuat/i).first(),
     ).toBeVisible({ timeout: 15_000 });

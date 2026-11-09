@@ -1,7 +1,7 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { tenantCatalogUrl } from "@/shared/config/hosts";
 import { Button } from "@/shared/ui/buttons";
 import { TextInput } from "@/shared/ui/form";
 import { InlineAlert } from "@/shared/ui/states";
@@ -14,7 +14,6 @@ const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/;
  * yang diberikan admin.
  */
 export function CatalogEntry() {
-  const router = useRouter();
   const [slug, setSlug] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -24,13 +23,14 @@ export function CatalogEntry() {
       setError("Slug toko hanya boleh huruf kecil, angka, dan tanda hubung (3-63 karakter).");
       return;
     }
-    router.push(`/t/${encodeURIComponent(normalized)}/katalog`);
+    // Katalog hanya disajikan di host tenant, jadi buka subdomainnya langsung.
+    window.location.assign(tenantCatalogUrl(normalized));
   };
 
   return (
     <div className="stack">
       <InlineAlert tone="info">
-        Link katalog toko biasanya berbentuk <span className="mono">/t/nama-toko/katalog</span>. Kalau kamu punya kode nama toko (slug), masukkan di bawah ya.
+        Link katalog toko berbentuk <span className="mono">nama-toko.rentalio.my.id/katalog</span>. Kalau kamu punya kode nama toko (slug), masukkan di bawah ya.
       </InlineAlert>
       <form
         className="stack-sm"

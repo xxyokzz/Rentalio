@@ -1,10 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
   isPlatformHost,
+  isTenantSlug,
   normalizeHostHeader,
   slugFromLocalhost,
   slugFromPlatformSubdomain,
+  tenantCatalogUrl,
 } from "./hosts";
+
+describe("tenantCatalogUrl", () => {
+  it("membangun URL katalog di host tenant, bukan path platform", () => {
+    expect(tenantCatalogUrl("demo-sewa")).toBe("https://demo-sewa.rentalio.my.id/katalog");
+  });
+
+  it("menolak slug yang tidak sah", () => {
+    expect(isTenantSlug("demo-sewa")).toBe(true);
+    expect(isTenantSlug("Demo-Sewa")).toBe(false);
+    expect(isTenantSlug("demo.sewa")).toBe(false);
+    expect(isTenantSlug("demo/../evil")).toBe(false);
+  });
+});
 
 describe("normalizeHostHeader", () => {
   it("membuang port, spasi, huruf besar, dan titik akhir", () => {

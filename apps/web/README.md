@@ -74,7 +74,7 @@ pnpm --filter @rentalio/web build
 | Route | Akses | Keterangan |
 | --- | --- | --- |
 | `/` | publik | Landing marketing pada host platform; pada host tenant (subdomain/`{slug}.localhost`/domain kustom terverifikasi) langsung menampilkan katalog tenant tersebut |
-| `/katalog`, `/t/[slug]/katalog` | publik | Katalog tenant, cek ketersediaan server, CTA WhatsApp; `/katalog` mengikuti host, `/t/[slug]` eksplisit |
+| `/katalog` | publik | Katalog tenant, cek ketersediaan server, CTA WhatsApp; mengikuti host (subdomain tenant / domain kustom). `/t/[slug]/katalog` hanya mengalihkan ke subdomain tenant |
 | `/login`, `/register` | publik | Layout split-screen: panel merek + formulir |
 | `/register/verify` | publik | Verifikasi OTP (cooldown 60 dtk, 5 percobaan) |
 | `/forgot-password`, `/reset-password` | publik | Permintaan reset generik + form reset token |
@@ -124,7 +124,7 @@ kontrol keamanan: backend tetap memeriksa membership, status tenant, dan permiss
 - **Landing & auth**: landing memakai animasi CSS + `Reveal` (IntersectionObserver) yang dimatikan
   otomatis pada `prefers-reduced-motion`; konten tetap tampil tanpa JS. Katalog tenant tidak
   ditautkan dari landing — pintu masuknya host tenant (subdomain `{slug}.rentalio.my.id`, domain kustom
-  terverifikasi, atau `/t/{slug}/katalog`). Resolusi host ada di `src/shared/config/hosts.ts` dan
+  terverifikasi). Tautan antar-halaman memakai `tenantCatalogUrl(slug)` di `src/shared/config/hosts.ts` dan
   `src/shared/api/public-tenant.ts`; domain kustom dipetakan lewat API (`/public/resolve-host`),
   bukan ditebak di browser. Keputusan stok kosong
   Opsi A/B dipusatkan di `src/features/catalog/policy.ts` (Opsi A menerima `PENDING_APPROVAL`,

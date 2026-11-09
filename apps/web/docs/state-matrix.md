@@ -234,7 +234,7 @@ Komponen bersama: `QueryState` (loading → error+retry → empty → konten),
 
 ### 20. Katalog publik
 
-- Route: `/`, `/katalog`, `/t/[slug]/katalog` (`catalog-page.tsx`, `shared/layout/public-shell.tsx`)
+- Route: `/`, `/katalog` (`catalog-page.tsx`, `shared/layout/public-shell.tsx`); `/t/[slug]/katalog` hanya mengalihkan ke host tenant
 - Titik masuk: host tenant (subdomain `{slug}.rentalio.my.id`, `{slug}.localhost`, atau domain kustom terverifikasi) membuka katalog langsung di `/` dan `/katalog`; landing dan header publik tidak menautkan katalog (keputusan produk).
 - Resolusi host: `shared/config/hosts.ts` (parsing) + `shared/api/public-tenant.ts` (lookup server-side ke `GET /public/resolve-host`, `cache()` per request). Domain kustom hanya aktif bila `tenant_domains.isActive`, `verifiedAt` terisi, dan tenant `ACTIVE`; selain itu 404 netral.
 - API: `/public/{slug}/catalog`, `/public/{slug}/products/{id}`, `/public/{slug}/availability`, `/public/{slug}/bookings`, `/portal/orders/{token}` (kontrak OpenAPI tag `Public`/`portal`).
