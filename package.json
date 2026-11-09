@@ -26,6 +26,7 @@
     "worker:start": "pnpm --filter @rentalio/api start:worker",
     "openapi:validate": "node scripts/validate-openapi.mjs",
     "qa:seed:badges": "node scripts/qa/seed-badge-data.mjs",
+    "qa:seed:e2e": "node database/prisma/seed-e2e.mjs",
     "actionlint": "bash scripts/actionlint.sh",
     "setup:clean": "node scripts/setup-clean-install.mjs"
   },

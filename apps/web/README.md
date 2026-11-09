@@ -167,19 +167,26 @@ kontrol keamanan: backend tetap memeriksa membership, status tenant, dan permiss
   sesi tersimpan dan tidak lagi mengisi form masuk; pengujian halaman masuk dipindah ke
   [e2e/login-form.spec.ts](e2e/login-form.spec.ts), yang sengaja **tidak** mengirim kredensial valid
   agar tidak menambah percobaan login.
-- **Seluruh isi `e2e/` hijau** (pengukuran 30 Oktober 2026, 47 eksekusi termasuk project `setup`):
-  **45 lulus, 0 gagal, 2 dilewati**. Dua yang dilewati adalah alur masuk → ringkasan di
-  `public.spec.ts`, yang butuh `E2E_EMAIL`/`E2E_PASSWORD` (lihat di atas).
-- **Fixture langganan tenant demo dibutuhkan suite.** `catalog_editor.spec.ts` tes 9 menyimpan draf,
-  dan command katalog ditolak server (`403 TENANT_RESTRICTED`) bila tenant demo hanya punya trial
-  yang sudah habis — akibatnya tes 9 gagal dan tes 10–12 serial tidak berjalan. Aktifkan sekali:
+- **Seluruh isi `e2e/` hijau** setelah `pnpm qa:seed:e2e` (pengukuran 9 November 2026):
+  **desktop 23 lulus / 0 gagal / 2 dilewati**, **mobile 22 lulus / 0 gagal / 2 dilewati**.
+  Dua yang dilewati adalah alur masuk → ringkasan di `public.spec.ts` (butuh
+  `E2E_EMAIL`/`E2E_PASSWORD`) dan `billing_qris.spec.ts` (butuh `EMAIL_PROVIDER=dev-file`).
+- **Fixture E2E dibuat oleh skrip, bukan data manual.** Suite membutuhkan akun
+  `demo@rentalio.test`, tenant `demo-sewa` ("Rental Kamera Bandung"), dua kategori, tiga produk
+  (Canon EOS R50, DJI Mic 2, Sony A7 III), serta langganan aktif — `catalog_editor.spec.ts` tes 9
+  menyimpan draf dan ditolak server (`403 TENANT_RESTRICTED`) bila tenant hanya punya trial habis.
+  Sediakan seluruhnya dengan satu perintah idempoten:
 
   ```bash
-  node database/prisma/activate_demo_subscription.mjs
+  pnpm qa:seed:e2e            # ulangi kapan saja; tidak menambah baris duplikat
+  pnpm qa:seed:e2e --dry-run  # hanya menampilkan rencana
   ```
 
-  Skrip itu idempoten (plan platform `free`, periode 1 tahun, dilewati bila subscription terbaru
-  sudah `ACTIVE` dengan `periodEnd` di masa depan).
+  Skrip (`database/prisma/seed-e2e.mjs`) membuat user ACTIVE + email terverifikasi, tenant, membership
+  OWNER, subscription ACTIVE 365 hari (plan platform `free`), kategori/produk/rate/aset, dan menyetel
+  ulang password fixture bila hash lama tidak cocok. Jalankan setelah `pnpm --filter @rentalio/database build`.
+- **Artefak tes ditulis ke `test-results/`** melalui `testInfo.outputPath()` (git-ignored), sehingga
+  suite portabel di mesin lain dan CI — tidak ada path absolut di spec.
 - `audit_all_features.spec.ts` lulus penuh (13 titik, desktop + mobile). Assertion status langganan
   di sidebar menerima salah satu state yang dikenal — `Coba gratis N hari lagi`, `Masa coba habis
   hari ini`, `Paket aktif`, `Toko ditangguhkan` — bukan satu nilai tetap, sehingga tur tidak patah

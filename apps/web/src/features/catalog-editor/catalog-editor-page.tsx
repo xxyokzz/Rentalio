@@ -1971,7 +1971,13 @@ export function CatalogEditorPage() {
         }
       />
 
-      <div className="cluster ce-status-strip" style={{ gap: "6px" }}>
+      {/* Penanda kesiapan hidrasi untuk E2E: selama `getState` belum selesai,
+          `blocks` masih berisi DEFAULT_BLOCKS lalu ditimpa hasil server —
+          interaksi yang terjadi di jendela itu bisa hilang. */}
+      <div
+        className="cluster ce-status-strip"
+        data-catalog-hydrated={loadingInitial ? "false" : "true"}
+        style={{ gap: "6px" }}>
         <Badge tone="neutral">Draf v{draftMeta.version ?? "—"}</Badge>
         <Badge tone={liveVersion === null ? "warning" : "success"}>
           {liveVersion === null ? "Live: belum diterbitkan" : `Live v${liveVersion}`}
