@@ -1,12 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { tenantCatalogUrl } from "@/shared/config/hosts";
+import { isTenantSlug, tenantCatalogUrl } from "@/shared/config/hosts";
 import { Button } from "@/shared/ui/buttons";
 import { TextInput } from "@/shared/ui/form";
 import { InlineAlert } from "@/shared/ui/states";
-
-const SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$/;
 
 /**
  * `/katalog` tanpa slug tidak boleh menebak tenant. Bila host bukan subdomain
@@ -19,7 +17,7 @@ export function CatalogEntry() {
 
   const submit = () => {
     const normalized = slug.trim().toLowerCase();
-    if (!SLUG_PATTERN.test(normalized)) {
+    if (!isTenantSlug(normalized)) {
       setError("Slug toko hanya boleh huruf kecil, angka, dan tanda hubung (3-63 karakter).");
       return;
     }
