@@ -19,8 +19,8 @@ rentalio/
 
 | Komponen | Versi | Catatan |
 | --- | --- | --- |
-| Node.js | 26.1.0 | lihat `.node-version` |
-| pnpm | 11.9.0 | `packageManager` di `package.json` |
+| Node.js | 26.13.0 | lihat `.node-version` |
+| pnpm | 12.18.0 | `packageManager` di `package.json` |
 | PostgreSQL | 18.4 | server lokal, tanpa Docker |
 
 Aktifkan Corepack agar pnpm versi benar terpakai:

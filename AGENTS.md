@@ -1,6 +1,6 @@
 # AGENTS.md
 
-rentalio — pnpm monorepo (Node 26.1.0, pnpm 11.9.0).
+rentalio — pnpm monorepo (Node 26.13.0, pnpm 12.18.0).
 
 ## Layout
 

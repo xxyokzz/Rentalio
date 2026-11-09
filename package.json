@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.1",
   "description": "Rentalio — platform rental multi-tenant. Monorepo backend + database.",
-  "packageManager": "pnpm@11.9.0",
+  "packageManager": "pnpm@12.18.0",
   "engines": {
     "node": "26.x"
   },
