@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { describeApiError, isApiRequestError } from "@/shared/api/errors";
 import { useSession } from "@/shared/auth/session";
+import { currentTenantSlug, tenantHostRedirect } from "@/shared/config/tenant-host";
 import { Button } from "@/shared/ui/buttons";
 import { TextInput } from "@/shared/ui/form";
 import { InlineAlert } from "@/shared/ui/states";
@@ -13,7 +14,7 @@ import { AuthCard } from "./auth-card";
 
 export function LoginForm({ next, verified }: { next?: string; verified?: boolean }) {
   const router = useRouter();
-  const { signIn } = useSession();
+  const { signIn, selectTenant } = useSession();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -31,8 +32,20 @@ export function LoginForm({ next, verified }: { next?: string; verified?: boolea
     setFieldError(null);
     setBusy(true);
     try {
-      await signIn(emailCheck.data, password);
+      const signedInTenants = await signIn(emailCheck.data, password);
       const target = next && next.startsWith("/") ? next : "/app";
+
+      // Domain mengikuti tenant: bila masuk lewat domain platform (atau
+      // subdomain tenant lain), lanjutkan di subdomain tenant akun ini.
+      const hostSlug = currentTenantSlug();
+      const hostTenant = signedInTenants.find((item) => item.slug === hostSlug);
+      if (hostTenant?.id) selectTenant(hostTenant.id);
+      const ownSlug = hostTenant?.slug ?? signedInTenants[0]?.slug;
+      const tenantTarget = ownSlug ? tenantHostRedirect(ownSlug, target, "") : null;
+      if (tenantTarget) {
+        window.location.assign(tenantTarget);
+        return;
+      }
       router.replace(target);
     } catch (caught) {
       setError(

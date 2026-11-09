@@ -267,7 +267,7 @@ openssl rand -hex 32      # CRON_SECRET / CRON_STATUS_TOKEN
 | `API_INTERNAL_URL` | `https://api.rentalio.my.id` |
 | `NEXT_PUBLIC_APP_URL` | `https://rentalio.my.id` |
 | `NEXT_PUBLIC_PLATFORM_ROOT_DOMAIN` | `rentalio.my.id` |
-| `NEXT_PUBLIC_DEFAULT_TENANT_SLUG` | kosong untuk production |
+| `NEXT_PUBLIC_DEFAULT_TENANT_SLUG` | tidak dipakai lagi; `/katalog` di domain platform menjawab 404 |
 | `SUPPORT_WHATSAPP` | digit tanpa `+`, opsional |
 
 ### `rentalio-admin`

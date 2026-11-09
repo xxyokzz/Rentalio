@@ -50,6 +50,19 @@ export class PublicController {
     return { data: await this.publicService.resolveDomain(query.host, this.ip(req)) };
   }
 
+  /**
+   * Identitas publik tenant berdasarkan slug subdomain platform.
+   * Dipakai web server-side untuk menolak subdomain yang tidak pernah
+   * terdaftar, sehingga `{apa-saja}.rentalio.my.id` tidak lagi menampilkan
+   * halaman tenant. Tenant non-aktif dijawab 404 netral seperti katalog.
+   */
+  @Get('tenants/:tenantSlug')
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({ summary: 'Identitas publik tenant berdasarkan slug subdomain' })
+  async tenantBySlug(@Param('tenantSlug') tenantSlug: string, @Req() req: Request) {
+    return { data: await this.publicService.getPublicTenantBySlug(tenantSlug, this.ip(req)) };
+  }
+
   @Get(':tenantSlug/catalog')
   @Header('Cache-Control', 'no-store')
   @ApiOperation({ summary: 'Katalog publik tenant (produk aktif + kategori)' })

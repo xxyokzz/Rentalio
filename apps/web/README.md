@@ -52,7 +52,6 @@ Environment `apps/web/.env.local`:
 | `API_INTERNAL_URL` | target rewrite server-side `/api/v1/*` → backend (default `http://localhost:3000`). Tidak masuk bundle browser. |
 | `NEXT_PUBLIC_APP_URL` | origin aplikasi untuk metadata/tautan absolut. |
 | `NEXT_PUBLIC_PLATFORM_ROOT_DOMAIN` | domain platform (default `rentalio.my.id`); subdomain langsung di bawahnya dibaca sebagai slug tenant. |
-| `NEXT_PUBLIC_DEFAULT_TENANT_SLUG` | slug tenant default untuk `/katalog` bila host bukan subdomain tenant maupun domain kustom. |
 | `SUPPORT_WHATSAPP` | nomor WhatsApp tim Rentalio (digit) untuk tautan perpanjangan/upgrade langganan di Pengaturan usaha. Dibaca server saat request (bukan `NEXT_PUBLIC_*`), jadi mengganti nomor cukup restart proses tanpa build ulang. Kosong → WhatsApp membuka pemilih kontak. |
 
 Jangan menaruh secret backend (API key Resend, `DATABASE_URL`, kredensial R2, dsb.) di env frontend:

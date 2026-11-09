@@ -193,7 +193,7 @@ Project `rentalio-web`:
 | `API_INTERNAL_URL` | URL API production, mis. `https://api.rentalio.my.id` |
 | `NEXT_PUBLIC_APP_URL` | origin web, mis. `https://rentalio.my.id` |
 | `NEXT_PUBLIC_PLATFORM_ROOT_DOMAIN` | domain root katalog, mis. `rentalio.my.id` |
-| `NEXT_PUBLIC_DEFAULT_TENANT_SLUG` | opsional, untuk mode demo |
+| `NEXT_PUBLIC_DEFAULT_TENANT_SLUG` | tidak dipakai lagi; katalog hanya di subdomain tenant |
 | `SUPPORT_WHATSAPP` | opsional |
 
 Project `rentalio-admin`:

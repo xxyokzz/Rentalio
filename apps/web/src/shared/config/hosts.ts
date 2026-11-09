@@ -114,3 +114,8 @@ export function isPlatformHost(host: string): boolean {
   if (!PLATFORM_ROOT_DOMAIN) return false;
   return host === PLATFORM_ROOT_DOMAIN || host.endsWith(`.${PLATFORM_ROOT_DOMAIN}`);
 }
+
+/** `true` hanya untuk domain platform itu sendiri, tanpa subdomain apa pun. */
+export function isPlatformApex(host: string): boolean {
+  return Boolean(PLATFORM_ROOT_DOMAIN) && host === PLATFORM_ROOT_DOMAIN;
+}

@@ -33,7 +33,8 @@ interface SessionContextValue {
   tenantError: unknown;
   sessionError: unknown;
   selectTenant: (tenantId: string) => void;
-  signIn: (email: string, password: string) => Promise<void>;
+  /** Selesai masuk, mengembalikan tenant milik akun agar pemanggil bisa memilih domain tenant. */
+  signIn: (email: string, password: string) => Promise<TenantSummary[]>;
   signOut: () => Promise<void>;
   refresh: () => Promise<void>;
   /** Dipakai pada alur yang mengubah session/role (mis. terima undangan). */
@@ -163,14 +164,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const signIn = useCallback(
-    async (loginEmail: string, password: string) => {
+    async (loginEmail: string, password: string): Promise<TenantSummary[]> => {
       const result = await authApi.login({ email: loginEmail, password });
       if (result.csrfToken) setCsrfToken(result.csrfToken);
       setEmail(result.user?.email ?? loginEmail);
       setProfile(result.user ?? null);
-      await loadTenants();
-      if (!mounted.current) return;
+      const list = await loadTenants();
+      if (!mounted.current) return list;
       setStatus("authenticated");
+      return list;
     },
     [loadTenants],
   );

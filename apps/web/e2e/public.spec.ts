@@ -66,18 +66,18 @@ test.describe("halaman publik", () => {
     );
   });
 
-  test("katalog tanpa sesi menjelaskan pembatasan kontrak, bukan data palsu", async ({ page }) => {
-    await page.goto("/katalog");
+  test("katalog tidak disajikan di domain platform", async ({ page }) => {
+    // Katalog hanya hidup di host tenant; domain platform tidak punya form
+    // tebak-slug maupun slug default.
+    const platform = await page.goto("/katalog");
+    expect(platform?.status()).toBe(404);
     await expect(
-      page.getByRole("heading", { name: "Buka katalog toko" }),
+      page.getByRole("heading", { name: "Halaman tidak ditemukan" }),
     ).toBeVisible();
 
-    // Katalog hanya disajikan di host tenant: path platform dialihkan ke subdomain.
-    await page.goto("/t/demo/katalog");
-    await expect(page).toHaveURL(/\/\/demo\.localhost:\d+\/katalog$/);
-    await expect(
-      page.getByText(/Memuat katalog|Katalog tidak ditemukan|tidak dapat dimuat/i).first(),
-    ).toBeVisible({ timeout: 15_000 });
+    // Path lama /t/{slug}/katalog hanya mengalihkan tenant yang terdaftar.
+    const legacy = await page.goto("/t/slug-yang-tidak-terdaftar/katalog");
+    expect(legacy?.status()).toBe(404);
   });
 });
 

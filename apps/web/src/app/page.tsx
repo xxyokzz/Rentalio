@@ -1,23 +1,26 @@
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import { notFound } from "next/navigation";
 import { LoginPage } from "@/features/auth/login-page";
 import { LandingPage } from "@/features/marketing/landing-page";
-import { resolveTenantFromHost } from "@/shared/api/public-tenant";
+import { resolveTenantHost } from "@/shared/api/public-tenant";
 import { PublicShell } from "@/shared/layout/public-shell";
 import { LoadingBlock } from "@/shared/ui/states";
 
 /**
  * Beranda melayani dua peran:
- * - host tenant (subdomain `{slug}.rentalio.my.id`, `{slug}.localhost`, atau domain
- *   kustom) → login toko dengan branding nama toko langsung pada root subdomain;
- * - host platform (`rentalio.my.id` / `localhost`) → landing marketing utama platform.
+ * - host tenant (subdomain `{slug}.rentalio.my.id` yang terdaftar, `{slug}.localhost`,
+ *   atau domain kustom terverifikasi) → login toko dengan branding nama toko;
+ * - host platform (`rentalio.my.id` / `localhost`) → landing marketing platform.
+ *
+ * Subdomain yang tidak terdaftar dijawab 404, bukan halaman login tenant.
  */
 export async function generateMetadata(): Promise<Metadata> {
   const headerList = await headers();
-  const tenant = await resolveTenantFromHost(headerList.get("host"));
-  if (tenant) {
-    const label = tenant.name ?? tenant.slug;
+  const resolution = await resolveTenantHost(headerList.get("host"));
+  if (resolution.kind === "tenant") {
+    const label = resolution.tenant.name ?? resolution.tenant.slug;
     return {
       title: `Masuk — ${label}`,
       description: `Portal masuk resmi untuk pemilik dan tim ${label}.`,
@@ -32,9 +35,11 @@ export async function generateMetadata(): Promise<Metadata> {
 
 export default async function Page() {
   const headerList = await headers();
-  const tenant = await resolveTenantFromHost(headerList.get("host"));
+  const resolution = await resolveTenantHost(headerList.get("host"));
+  if (resolution.kind === "unknown-tenant") notFound();
 
-  if (tenant) {
+  if (resolution.kind === "tenant") {
+    const { tenant } = resolution;
     return (
       <Suspense
         fallback={

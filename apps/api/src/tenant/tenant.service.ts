@@ -10,6 +10,7 @@ import type { AppConfig } from '../config/env.validation.js';
 import type { CreateTenantDto, UpdateTenantSettingsDto, InviteMemberDto, UpdateMemberDto } from './tenant.dto.js';
 import { createDefaultWhatsAppTemplates } from '../whatsapp-templates/whatsapp-templates.defaults.js';
 import { SubscriptionPolicyService } from '../subscriptions/subscription-policy.service.js';
+import { isReservedTenantSlug } from './tenant-slugs.js';
 
 /** TTL undangan staf: 7 hari. */
 const INVITATION_TTL_MS = 7 * 24 * 3600 * 1000;
@@ -64,6 +65,15 @@ export class TenantService {
     ctx: { actorUserId: string; correlationId: string },
   ): Promise<{ id: string; slug: string; name: string }> {
     const slug = dto.slug.toLowerCase().trim();
+
+    // Label milik platform (app, api, www, …) tidak boleh menjadi subdomain
+    // tenant: alamat itu dipakai web untuk rute platform sendiri.
+    if (isReservedTenantSlug(slug)) {
+      throw new ApiError(
+        ErrorCode.BUSINESS_RULE_VIOLATION,
+        'Slug ini dipakai alamat platform. Pilih nama lain untuk toko kamu.',
+      );
+    }
 
     const now = new Date();
     const trialEndsAt = new Date(now.getTime() + 72 * 3600 * 1000);

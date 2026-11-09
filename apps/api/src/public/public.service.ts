@@ -162,6 +162,19 @@ export class PublicService {
     return { tenant: this.publicTenant(tenant) };
   }
 
+  /**
+   * Identitas publik tenant dari slug subdomain platform.
+   *
+   * Web memakai hasil ini untuk memutuskan apakah sebuah subdomain benar-benar
+   * milik tenant aktif; slug yang tidak terdaftar dijawab 404 yang sama dengan
+   * katalog agar daftar slug tidak bisa ditebak dari perbedaan respons.
+   */
+  async getPublicTenantBySlug(slug: string, ip: string) {
+    await this.consume(PUBLIC_RATE_LIMITS.hostIp, ip);
+    const tenant = await this.resolveTenant(slug);
+    return { tenant: this.publicTenant(tenant) };
+  }
+
   async checkAvailability(slug: string, productId: string, startAt: string, endAt: string, ip: string) {
     await this.consume(PUBLIC_RATE_LIMITS.availabilityIp, ip);
     const tenant = await this.resolveTenant(slug);
