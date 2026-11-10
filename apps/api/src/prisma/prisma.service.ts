@@ -15,6 +15,15 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   private static readonly RETRYABLE_TRANSACTION_CODES = new Set(['40001', '40P01']);
   private static readonly TRANSACTION_RETRY_DELAYS_MS = [10, 25, 50] as const;
 
+  /**
+   * Anggaran tunggu transaksi. Default Prisma (maxWait 2 detik) membuat request
+   * gagal P2028 saat pool koneksi di serverless hanya 1 dan satu halaman
+   * mengirim beberapa request paralel; lebih baik menunggu antrean selesai.
+   * `maxWait` < `connectionTimeoutMillis` agar pesan galat tetap berasal dari
+   * Prisma, bukan dari driver pg.
+   */
+  private static readonly TRANSACTION_OPTIONS = { maxWait: 20_000, timeout: 30_000 } as const;
+
   constructor(@Inject('APP_CONFIG') config: AppConfig) {
     // Supabase transaction pooler: pakai pool kecil di serverless (mis. 1)
     // supaya jumlah koneksi tidak meledak mengikuti jumlah instance function.
@@ -22,10 +31,18 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     const adapter = new PrismaPg({
       connectionString: config.DATABASE_URL,
       max: config.DATABASE_POOL_MAX,
-      connectionTimeoutMillis: 10_000,
+      connectionTimeoutMillis: 25_000,
       idleTimeoutMillis: 10_000,
     });
     this.client = new PrismaClient({ adapter });
+  }
+
+  /**
+   * Transaksi dengan anggaran tunggu eksplisit. Semua helper konteks RLS dan
+   * penulisan domain memakai jalur ini supaya perilaku antrean pool konsisten.
+   */
+  transaction<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    return this.client.$transaction(fn, PrismaService.TRANSACTION_OPTIONS);
   }
 
   async onModuleInit(): Promise<void> {
@@ -66,7 +83,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   ): Promise<T> {
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await this.client.$transaction(fn);
+        return await this.transaction(fn);
       } catch (error) {
         const code = this.postgresSqlState(error);
         const delay = PrismaService.TRANSACTION_RETRY_DELAYS_MS[attempt];
@@ -137,7 +154,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     slug: string,
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
-    return this.client.$transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.public_tenant_slug', ${slug}, true)`;
       return fn(tx);
     });
@@ -153,7 +170,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     hostname: string,
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
-    return this.client.$transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.public_hostname', ${hostname}, true)`;
       return fn(tx);
     });
@@ -168,7 +185,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     tokenHash: string,
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
-    return this.client.$transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.portal_token_hash', ${tokenHash}, true)`;
       return fn(tx);
     });
@@ -185,7 +202,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     tokenHash: string,
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
-    return this.client.$transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.invitation_token_hash', ${tokenHash}, true)`;
       return fn(tx);
     });
@@ -198,7 +215,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
    * dengan `app.tenant_id` (policy migration 008).
    */
   async withOutboxSystem<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
-    return this.client.$transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.outbox_system', 'on', true)`;
       return fn(tx);
     });
@@ -214,7 +231,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
   async withSubscriptionReconciler<T>(
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
-    return this.client.$transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.subscription_reconciler', 'on', true)`;
       return fn(tx);
     });
@@ -227,7 +244,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
    * Klaim dan audit tetap dijalankan pada `withTenant` masing-masing.
    */
   async withBillingReminder<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
-    return this.client.$transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.billing_reminder', 'on', true)`;
       return fn(tx);
     });
@@ -241,7 +258,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
    * pemanggil wajib sudah memverifikasi sesi admin + permission backend.
    */
   async withPlatformAdmin<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
-    return this.client.$transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.platform_admin', 'on', true)`;
       return fn(tx);
     });
@@ -257,7 +274,7 @@ export class PrismaService implements OnModuleInit, OnModuleDestroy {
     actorUserId: string,
     fn: (tx: Prisma.TransactionClient) => Promise<T>,
   ): Promise<T> {
-    return this.client.$transaction(async (tx) => {
+    return this.transaction(async (tx) => {
       await tx.$executeRaw`SELECT set_config('app.user_id', ${actorUserId}, true)`;
       return fn(tx);
     });

@@ -234,7 +234,7 @@ export class AuthService {
     }
 
     const otp = generateOtp();
-    await this.prisma.client.$transaction(async (tx) => {
+    await this.prisma.transaction(async (tx) => {
       // Resend menginvalidasi challenge aktif sebelumnya (atomic swap).
       await tx.emailVerificationChallenge.updateMany({
         where: {
@@ -302,7 +302,7 @@ export class AuthService {
     });
 
     try {
-      transactionResult = await this.prisma.client.$transaction(
+      transactionResult = await this.prisma.transaction(
         async (tx) => {
           const challenge = await tx.emailVerificationChallenge.findFirst({
             where: {
@@ -380,9 +380,6 @@ export class AuthService {
           });
 
           return { ok: true, userId: challenge.userId };
-        },
-        {
-          // Prisma transaction options if needed
         },
       );
     } catch (err) {
@@ -692,7 +689,7 @@ export class AuthService {
     const user = await this.prisma.client.user.findUnique({ where: { email } });
     if (user) {
       const token = randomToken();
-      await this.prisma.client.$transaction(async (tx) => {
+      await this.prisma.transaction(async (tx) => {
         // Penerbitan token baru menginvalidasi token lama untuk akun yang sama.
         await tx.passwordResetChallenge.updateMany({
           where: { userId: user.id, consumedAt: null, invalidatedAt: null },
@@ -746,7 +743,7 @@ export class AuthService {
     const passwordHash = hashPassword(input.newPassword);
     const tokenHash = sha256(input.token);
 
-    const outcome = await this.prisma.client.$transaction(async (tx) => {
+    const outcome = await this.prisma.transaction(async (tx) => {
       const challenge = await tx.passwordResetChallenge.findUnique({
         where: { tokenHash },
       });

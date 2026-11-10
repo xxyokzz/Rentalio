@@ -150,7 +150,7 @@ Set di project `rentalio-api`, untuk **Production** (dan Preview bila perlu):
 | --- | --- |
 | `NODE_ENV` | `production` |
 | `DATABASE_URL` | transaction pooler `sewain_dev` (port 6543) |
-| `DATABASE_POOL_MAX` | `1` (serverless) |
+| `DATABASE_POOL_MAX` | `5` (serverless). Nilai `1` membuat beberapa request paralel pada satu halaman mengantre di satu koneksi dan gagal `P2028` |
 | `HMAC_PEPPER` | minimal 32 karakter acak |
 | `PLATFORM_ADMIN_ENCRYPTION_KEY` | base64 dari 32 byte |
 | `PLATFORM_ADMIN_BASE_URL` | origin admin, mis. `https://admin.rentalio.my.id` |

@@ -203,7 +203,7 @@ terpisah dan jangan mencampur secret production.
 | --- | --- | --- |
 | `NODE_ENV` | `production` | Wajib |
 | `DATABASE_URL` | transaction pooler `sewain_dev` port 6543 | **Centang Build** |
-| `DATABASE_POOL_MAX` | `1` | Serverless |
+| `DATABASE_POOL_MAX` | `5` | Serverless; `1` membuat request paralel dalam satu halaman saling mengunci dan gagal `P2028` |
 | `HMAC_PEPPER` | acak, minimal 32 karakter | Jangan pernah diganti sembarangan |
 | `PLATFORM_ADMIN_ENCRYPTION_KEY` | base64 tepat 32 byte | Jangan rotasi tanpa rencana |
 | `PLATFORM_ADMIN_BASE_URL` | `https://admin.rentalio.my.id` | Origin exact, tanpa path/trailing slash |
