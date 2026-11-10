@@ -6,7 +6,7 @@ import { useEffect, type ReactNode } from "react";
 import { useSession } from "@/shared/auth/session";
 import { isPlatformApex } from "@/shared/config/hosts";
 import { canViewRoute } from "@/shared/config/navigation";
-import { tenantHostRedirect } from "@/shared/config/tenant-host";
+import { currentTenantSlug, tenantHostRedirect } from "@/shared/config/tenant-host";
 import { DesktopShell } from "@/desktop/desktop-shell";
 import { MobileShell } from "@/mobile/mobile-shell";
 import { useIsMobile } from "@/shared/hooks/useMediaQuery";
@@ -28,7 +28,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const isMobile = useIsMobile();
-  const { status, tenants, role, tenant, tenantId, sessionError, refresh } = useSession();
+  const { status, tenants, role, tenant, tenantId, sessionError, refresh, selectTenant } =
+    useSession();
   const isOnboarding = pathname === "/app/onboarding";
 
   useEffect(() => {
@@ -49,13 +50,21 @@ export function AppShell({ children }: { children: ReactNode }) {
   // Onboarding pendaftaran baru dikecualikan karena subdomainnya baru dibuat
   // di halaman itu.
   useEffect(() => {
-    if (status !== "authenticated" || !tenantId || tenants.length === 0) return;
-    const ownSlug = tenants.find((item) => item.id === tenantId)?.slug;
+    if (status !== "authenticated" || tenants.length === 0) return;
+    // Subdomain yang sedang dibuka menang atas pilihan tenant tersimpan: cookie
+    // `sw_tenant` berlaku per host, jadi akun multi-tenant yang membuka toko
+    // kedua tidak boleh dipindahkan ke toko pertama.
+    const hostSlug = currentTenantSlug();
+    const hostTenant = hostSlug
+      ? tenants.find((item) => item.slug === hostSlug)
+      : undefined;
+    if (hostTenant?.id && hostTenant.id !== tenantId) selectTenant(hostTenant.id);
+    const ownSlug = hostTenant?.slug ?? tenants.find((item) => item.id === tenantId)?.slug;
     if (!ownSlug) return;
     if (isOnboarding && isPlatformApex(window.location.hostname)) return;
     const target = tenantHostRedirect(ownSlug, pathname, window.location.search);
     if (target) window.location.replace(target);
-  }, [isOnboarding, pathname, status, tenantId, tenants]);
+  }, [isOnboarding, pathname, selectTenant, status, tenantId, tenants]);
 
   if (status === "loading") return <FullScreenLoading label="Memeriksa sesi Anda…" />;
   if (status === "anonymous") return <FullScreenLoading label="Mengalihkan ke halaman masuk…" />;

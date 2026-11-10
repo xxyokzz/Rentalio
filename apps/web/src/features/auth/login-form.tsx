@@ -26,7 +26,11 @@ export function LoginForm({ next, verified }: { next?: string; verified?: boolea
   // halaman masuk).
   useEffect(() => {
     if (status !== "authenticated") return;
-    const ownSlug = tenants[0]?.slug;
+    // Saat halaman ini dibuka di subdomain toko, toko itulah yang dilanjutkan
+    // bila akun menjadi anggotanya; cookie pilihan tenant tidak lintas host.
+    const hostSlug = currentTenantSlug();
+    const hostTenant = hostSlug ? tenants.find((item) => item.slug === hostSlug) : undefined;
+    const ownSlug = hostTenant?.slug ?? tenants[0]?.slug;
     if (!ownSlug) return;
     const target = next && next.startsWith("/") ? next : "/app";
     const tenantTarget = tenantHostRedirect(ownSlug, target, "");
