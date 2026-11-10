@@ -8,6 +8,7 @@ import type { Request } from 'express';
 import { AuthService } from './auth.service.js';
 import { ApiError, ErrorCode } from '../common/errors.js';
 import type { AppConfig } from '../config/env.validation.js';
+import { isAllowedOrigin } from '../config/origins.js';
 
 /**
  * Guard dipisah dari auth.module.ts untuk menghindari circular import
@@ -48,7 +49,7 @@ export class CsrfGuard implements CanActivate {
     }
 
     const origin = req.header('origin');
-    if (origin && !this.config.CORS_ORIGINS.includes(origin)) {
+    if (origin && !isAllowedOrigin(this.config.CORS_ORIGINS, origin)) {
       throw new ApiError(ErrorCode.CSRF_VALIDATION_FAILED, 'Origin tidak diizinkan.');
     }
 

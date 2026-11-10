@@ -1,3 +1,5 @@
+import { isOriginPattern } from './origins.js';
+
 /**
  * Validasi environment saat startup.
  * Kontrak: dokumen 12 (Sprint 0, S0-05) — konfigurasi wajib yang hilang
@@ -17,7 +19,13 @@ export interface AppConfig {
   PLATFORM_ADMIN_ENCRYPTION_KEY: string;
   /** Cookie sesi: Secure aktif di production (TLS wajib). */
   COOKIE_SECURE: boolean;
-  /** Allowlist origin untuk CORS + validasi Origin/Referer CSRF. */
+  /**
+   * Domain cookie sesi, mis. `rentalio.my.id`. Bila di-set, sesi berlaku di
+   * seluruh subdomain tenant sehingga pengguna tetap masuk setelah dialihkan
+   * dari domain platform ke subdomain tokonya. Kosong = host-only (localhost).
+   */
+  SESSION_COOKIE_DOMAIN?: string;
+  /** Allowlist origin untuk CORS + validasi Origin/Referer CSRF (boleh berwildcard). */
   CORS_ORIGINS: string[];
   /**
    * Pengiriman email OTP/reset.
@@ -176,6 +184,51 @@ export function validateConfig(env: NodeJS.ProcessEnv): AppConfig {
   if (corsOrigins.length === 0) {
     throw new ConfigError('CORS_ORIGINS minimal satu origin.');
   }
+  const invalidOrigin = corsOrigins.find((origin) => !isOriginPattern(origin));
+  if (invalidOrigin) {
+    throw new ConfigError(
+      `CORS_ORIGINS berisi origin tidak valid: ${invalidOrigin}. Pakai bentuk https://host atau https://*.domain.`,
+    );
+  }
+
+  // Domain platform dipakai untuk dua hal di production: cookie sesi yang
+  // dibagi ke subdomain tenant, dan pola Origin tenant pada allowlist CORS.
+  // Diturunkan dari APP_BASE_URL agar tidak ada dua sumber kebenaran.
+  const appBaseUrl = env.APP_BASE_URL ?? 'http://localhost:3001';
+  let appApexHost: string | null = null;
+  try {
+    const parsedApp = new URL(appBaseUrl);
+    const host = parsedApp.hostname;
+    // Hanya domain apex sungguhan. Preview (*.vercel.app), localhost, dan alamat
+    // IP tidak dijadikan acuan: cookie berdomain apex akan ditolak browser di sana.
+    const isIpv4 = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+    if (
+      nodeEnv === 'production' &&
+      host.includes('.') &&
+      !isIpv4 &&
+      !host.endsWith('.vercel.app')
+    ) {
+      appApexHost = host;
+    }
+  } catch {
+    /* bentuk APP_BASE_URL sudah divalidasi melalui CORS_ORIGINS/APP checks lain */
+  }
+
+  const sessionCookieDomain =
+    env.SESSION_COOKIE_DOMAIN?.trim().toLowerCase() || appApexHost || undefined;
+  if (
+    sessionCookieDomain !== undefined &&
+    !/^\.?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(sessionCookieDomain)
+  ) {
+    throw new ConfigError(
+      'SESSION_COOKIE_DOMAIN harus berupa domain tanpa skema/path, mis. rentalio.my.id.',
+    );
+  }
+
+  if (appApexHost) {
+    const tenantOriginPattern = `https://*.${appApexHost}`;
+    if (!corsOrigins.includes(tenantOriginPattern)) corsOrigins.push(tenantOriginPattern);
+  }
 
   const platformAdminBaseUrl = env.PLATFORM_ADMIN_BASE_URL ?? 'http://localhost:3002';
   let parsedAdminOrigin: URL;
@@ -308,6 +361,7 @@ export function validateConfig(env: NodeJS.ProcessEnv): AppConfig {
       env.COOKIE_SECURE != null
         ? env.COOKIE_SECURE === 'true'
         : nodeEnv === 'production',
+    SESSION_COOKIE_DOMAIN: sessionCookieDomain,
     CORS_ORIGINS: corsOrigins,
     EMAIL_PROVIDER: emailProvider,
     RESEND_API_KEY: resendApiKey,

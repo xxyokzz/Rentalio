@@ -9,6 +9,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { AppModule } from './app.module.js';
 import { HttpErrorFilter } from './common/http-error.filter.js';
 import { ConfigError, validateConfig } from './config/env.validation.js';
+import { isAllowedOrigin } from './config/origins.js';
 
 /**
  * Bootstrap API Rentalio.
@@ -40,7 +41,11 @@ async function bootstrap(): Promise<void> {
   app.setGlobalPrefix('api/v1');
   app.use(cookieParser());
   app.enableCors({
-    origin: config.CORS_ORIGINS,
+    // Allowlist boleh memuat wildcard subdomain tenant (`https://*.rentalio.my.id`).
+    origin: (
+      origin: string | undefined,
+      callback: (err: Error | null, allow?: boolean) => void,
+    ) => callback(null, !origin || isAllowedOrigin(config.CORS_ORIGINS, origin)),
     credentials: true,
   });
   app.useGlobalPipes(

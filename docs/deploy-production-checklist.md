@@ -207,7 +207,8 @@ terpisah dan jangan mencampur secret production.
 | `HMAC_PEPPER` | acak, minimal 32 karakter | Jangan pernah diganti sembarangan |
 | `PLATFORM_ADMIN_ENCRYPTION_KEY` | base64 tepat 32 byte | Jangan rotasi tanpa rencana |
 | `PLATFORM_ADMIN_BASE_URL` | `https://admin.rentalio.my.id` | Origin exact, tanpa path/trailing slash |
-| `CORS_ORIGINS` | origin web + admin, pisahkan koma | Tanpa trailing slash |
+| `CORS_ORIGINS` | origin web + admin + `https://*.rentalio.my.id`, pisahkan koma | Tanpa trailing slash; wildcard hanya satu label subdomain |
+| `SESSION_COOKIE_DOMAIN` | `rentalio.my.id` | Sesi berlaku di subdomain tenant; kosong = host-only |
 | `APP_BASE_URL` | `https://rentalio.my.id` | Origin web |
 | `COOKIE_SECURE` | `true` | Wajib HTTPS |
 | `EMAIL_PROVIDER` | `resend` | Wajib di production |

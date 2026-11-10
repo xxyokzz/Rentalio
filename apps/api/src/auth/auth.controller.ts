@@ -4,13 +4,14 @@ import {
   Delete,
   Get,
   HttpCode,
+  Inject,
   Post,
   Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
-import type { Request, Response } from 'express';
+import type { CookieOptions, Request, Response } from 'express';
 import {
   AuthService,
   SESSION_COOKIE,
@@ -27,6 +28,7 @@ import {
   VerifyEmailDto,
 } from './auth.dto.js';
 import { ApiError, ErrorCode } from '../common/errors.js';
+import type { AppConfig } from '../config/env.validation.js';
 
 /**
  * Kontrak endpoint auth (dikunci, dokumen 03 bagian "Kontrak OpenAPI"):
@@ -41,7 +43,10 @@ import { ApiError, ErrorCode } from '../common/errors.js';
  * POST   /auth/password-resets/complete
  *
  * Cookie sesi: rentalio_session; HttpOnly; Secure; SameSite=Lax; Path=/;
- * host-only (tanpa Domain). Mutasi sesi wajib X-CSRF-Token + validasi Origin.
+ * Domain mengikuti SESSION_COOKIE_DOMAIN bila di-set (production: domain
+ * platform) agar sesi tetap berlaku saat pengguna dipindah ke subdomain tenant;
+ * kosong berarti host-only (localhost). Mutasi sesi wajib X-CSRF-Token +
+ * validasi Origin.
  */
 
 interface AuthedRequest extends Request {
@@ -60,7 +65,10 @@ type SessionUser = {
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    @Inject('APP_CONFIG') private readonly config: AppConfig,
+  ) {}
 
   @Post('registrations')
   @HttpCode(202)
@@ -122,10 +130,7 @@ export class AuthController {
       { ip: req.ip ?? 'unknown', correlationId: req.correlationId },
     );
     res.cookie(SESSION_COOKIE, issued.token, {
-      httpOnly: true,
-      secure: this.cookieSecure(),
-      sameSite: 'lax',
-      path: '/',
+      ...this.sessionCookieOptions(),
       expires: issued.absoluteExpiresAt,
     });
     // CSRF token dikirim via header agar mudah dibaca frontend.
@@ -179,7 +184,7 @@ export class AuthController {
       throw new ApiError(ErrorCode.UNAUTHENTICATED, 'Sesi tidak valid.');
     }
     await this.auth.logout(req.session.id, req.correlationId);
-    res.clearCookie(SESSION_COOKIE, { path: '/' });
+    res.clearCookie(SESSION_COOKIE, this.sessionCookieOptions());
     return { status: 204 };
   }
 
@@ -229,6 +234,18 @@ export class AuthController {
   private cookieSecure(): boolean {
     // Ikuti konfigurasi; secure=false hanya untuk http lokal dev/test.
     return process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
+  }
+
+  /** Opsi cookie sesi; dipakai saat menetapkan maupun menghapus (harus sama). */
+  private sessionCookieOptions(): CookieOptions {
+    const domain = this.config.SESSION_COOKIE_DOMAIN;
+    return {
+      httpOnly: true,
+      secure: this.cookieSecure(),
+      sameSite: 'lax',
+      path: '/',
+      ...(domain ? { domain } : {}),
+    };
   }
 }
 
