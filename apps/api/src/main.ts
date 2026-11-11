@@ -55,7 +55,9 @@ async function bootstrap(): Promise<void> {
       transform: true,
     }),
   );
-  app.useGlobalFilters(new HttpErrorFilter());
+  // Filter diambil dari container agar layanan alert (log + email 5xx) ikut
+  // terpasang; `new HttpErrorFilter()` tetap didukung untuk test.
+  app.useGlobalFilters(app.get(HttpErrorFilter));
 
   // Security headers sederhana ( helmet tidak dipakai agar dependency minimal ).
   app.use((req: Request, res: Response, next: NextFunction) => {

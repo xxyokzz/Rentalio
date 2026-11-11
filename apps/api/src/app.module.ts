@@ -21,6 +21,8 @@ import { SessionCookieMiddleware } from './auth/session-cookie.middleware.js';
 import { CorrelationIdMiddleware } from './common/correlation-id.middleware.js';
 import { RequestLoggingMiddleware } from './common/request-logging.middleware.js';
 import { StructuredLogger } from './common/logger.service.js';
+import { HttpErrorFilter } from './common/http-error.filter.js';
+import { ApiFailureAlertService } from './monitoring/api-failure-alert.service.js';
 import { HealthController } from './health/health.controller.js';
 import { CronController } from './internal/cron.controller.js';
 import { StorageModule } from './storage/storage.module.js';
@@ -53,7 +55,7 @@ import { BillingModule } from './billing/billing.module.js';
     BillingModule,
   ],
   controllers: [HealthController, CronController],
-  providers: [StructuredLogger],
+  providers: [StructuredLogger, ApiFailureAlertService, HttpErrorFilter],
   exports: [StructuredLogger],
 })
 export class AppModule implements NestModule {

@@ -59,6 +59,14 @@ export interface AppConfig {
   /** Umur maksimum run terakhir sebelum status dianggap stale (detik). */
   CRON_STALE_AFTER_SECONDS: number;
   /**
+   * Penerima alert 5xx/P2028 dari endpoint API. Kosong = fallback
+   * `PLATFORM_OPERATOR_EMAIL`; bila keduanya kosong, alert email mati dan hanya
+   * log `api_failure_alert` yang ditulis.
+   */
+  API_ALERT_EMAIL?: string;
+  /** Jeda minimum antar-alert 5xx per instance (detik). */
+  API_ALERT_COOLDOWN_SECONDS: number;
+  /**
    * Pengali batas rate limit (default 1 = angka kontrak auth).
    * Dokumen 10: "Ambang maksimum request per jangka waktu ... merupakan
    * parameter konfigurasi". Nilai > 1 dipakai test agar suite biasa tidak
@@ -281,6 +289,16 @@ export function validateConfig(env: NodeJS.ProcessEnv): AppConfig {
     86_400,
   );
   const cronStaleAfterSeconds = intEnv('CRON_STALE_AFTER_SECONDS', 300, 60, 86_400);
+  const apiAlertEmail = env.API_ALERT_EMAIL?.trim() || undefined;
+  if (apiAlertEmail && !/^[^@\s]+@[^@\s]+$/.test(apiAlertEmail)) {
+    throw new ConfigError('API_ALERT_EMAIL harus berupa alamat email yang valid.');
+  }
+  const apiAlertCooldownSeconds = intEnv(
+    'API_ALERT_COOLDOWN_SECONDS',
+    300,
+    30,
+    86_400,
+  );
 
   const outboxWorkerEnabled = env.OUTBOX_WORKER_ENABLED === 'true';
   const outboxPollIntervalMs = intEnv('OUTBOX_POLL_INTERVAL_MS', 5_000, 100, 3_600_000);
@@ -375,6 +393,8 @@ export function validateConfig(env: NodeJS.ProcessEnv): AppConfig {
     CRON_ALERT_EMAIL: cronAlertEmail,
     CRON_ALERT_COOLDOWN_SECONDS: cronAlertCooldownSeconds,
     CRON_STALE_AFTER_SECONDS: cronStaleAfterSeconds,
+    API_ALERT_EMAIL: apiAlertEmail,
+    API_ALERT_COOLDOWN_SECONDS: apiAlertCooldownSeconds,
     RATE_LIMIT_SCALE: rateLimitScale,
     OUTBOX_WORKER_ENABLED: outboxWorkerEnabled,
     OUTBOX_POLL_INTERVAL_MS: outboxPollIntervalMs,

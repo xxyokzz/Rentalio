@@ -3,6 +3,7 @@ import {
   Catch,
   ExceptionFilter,
   HttpException,
+  Optional,
 } from '@nestjs/common';
 import type { Response, Request } from 'express';
 import {
@@ -12,15 +13,22 @@ import {
   ErrorCode,
 } from './errors.js';
 import { StructuredLogger } from './logger.service.js';
+import { ApiFailureAlertService } from '../monitoring/api-failure-alert.service.js';
 
 @Catch()
 export class HttpErrorFilter implements ExceptionFilter {
   private readonly logger: StructuredLogger;
+  private readonly alerts?: ApiFailureAlertService;
 
-  // Default konstruktor menjaga kompatibilitas `new HttpErrorFilter()` di test;
-  // NestJS dapat menyuntikkan logger bila filter didaftarkan sebagai provider.
-  constructor(logger: StructuredLogger = new StructuredLogger()) {
-    this.logger = logger;
+  // Semua parameter opsional agar `new HttpErrorFilter()` tetap jalan di test;
+  // NestJS menyuntikkan logger dan layanan alert bila filter didaftarkan sebagai
+  // provider (AppModule + main.ts).
+  constructor(
+    @Optional() logger?: StructuredLogger,
+    @Optional() alerts?: ApiFailureAlertService,
+  ) {
+    this.logger = logger ?? new StructuredLogger();
+    this.alerts = alerts;
   }
 
   catch(exception: unknown, host: ArgumentsHost): void {
@@ -71,6 +79,23 @@ export class HttpErrorFilter implements ExceptionFilter {
           exception instanceof Error
             ? { name: exception.name, message: exception.message, stack: exception.stack }
             : exception,
+      });
+    }
+
+    if (status >= 500) {
+      const session = request.session;
+      // Tidak ditunggu: peringatan tidak boleh menambah latensi atau menggagalkan
+      // response. Service menulis log `api_failure_alert` per kegagalan dan
+      // mengirim email ringkasan yang dibatasi cooldown.
+      void this.alerts?.report({
+        status,
+        code,
+        method: request.method,
+        path: request.path,
+        correlationId,
+        userId: session?.userId,
+        tenantSlug: session?.tenantSlug,
+        error: exception,
       });
     }
 

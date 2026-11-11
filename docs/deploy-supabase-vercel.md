@@ -163,6 +163,8 @@ Set di project `rentalio-api`, untuk **Production** (dan Preview bila perlu):
 | `CRON_SECRET` | string acak; dipakai Vercel Cron |
 | `CRON_STATUS_TOKEN` | opsional; token endpoint status (fallback `CRON_SECRET`) |
 | `CRON_ALERT_EMAIL` | opsional; penerima alert (fallback `PLATFORM_OPERATOR_EMAIL`) |
+| `API_ALERT_EMAIL` | opsional; penerima alert 5xx/P2028 endpoint tenant (fallback `PLATFORM_OPERATOR_EMAIL`) |
+| `API_ALERT_COOLDOWN_SECONDS` | default `300`; jeda minimum antar-alert per instance |
 | `CRON_ALERT_COOLDOWN_SECONDS` | `3600`; jeda minimum antar-alert |
 | `CRON_STALE_AFTER_SECONDS` | `300`; batas umur run terakhir |
 | `OUTBOX_WORKER_ENABLED` | `false` |

@@ -218,6 +218,8 @@ terpisah dan jangan mencampur secret production.
 | `CRON_SECRET` | string acak | Vercel Cron mengirim bearer ini |
 | `CRON_STATUS_TOKEN` | string acak terpisah | Opsional; fallback `CRON_SECRET` |
 | `CRON_ALERT_EMAIL` | email operator | Opsional; fallback `PLATFORM_OPERATOR_EMAIL` |
+| `API_ALERT_EMAIL` | email operator | Alert 5xx/P2028 endpoint tenant; kosong = fallback `PLATFORM_OPERATOR_EMAIL` |
+| `API_ALERT_COOLDOWN_SECONDS` | `300` | Jeda minimum antar-alert per instance; kegagalan lain tetap dicatat di log |
 | `CRON_ALERT_COOLDOWN_SECONDS` | `3600` | Default aman |
 | `CRON_STALE_AFTER_SECONDS` | `300` | Default aman |
 | `OUTBOX_WORKER_ENABLED` | `false` | Jangan hidupkan interval di serverless |
@@ -421,6 +423,7 @@ Simpan pada environment `production` di GitHub:
 - [ ] Uptime monitor memanggil endpoint status cron tiap 1–5 menit dengan
       bearer token; alert pada non-2xx.
 - [ ] Alert email cron diarahkan ke `CRON_ALERT_EMAIL`/operator.
+- [ ] Alert 5xx/P2028 diarahkan ke `API_ALERT_EMAIL` (atau `PLATFORM_OPERATOR_EMAIL`) dan satu email uji diterima.
 - [ ] Log Drain dipasang bila diperlukan retensi/analisis log.
 - [ ] Dashboard Supabase dipantau: koneksi pooler, CPU, disk, slow query.
 - [ ] Biaya/kuota Vercel dan Supabase dipantau.
