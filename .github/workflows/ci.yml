@@ -8,7 +8,11 @@
 #   3. pnpm lint              — ESLint (error = gagal; warning tidak)
 #   4. pnpm build             — tsc build semua package
 #   5. pnpm test              — unit + integration terhadap PostgreSQL 18 sungguhan
-#                               (globalSetup membangun schema dari database kosong)
+#                               (globalSetup membangun schema dari database kosong).
+#                               Termasuk uji beban singkat antrean transaksi:
+#                               `test/integration/transaction-pool-load.integration.test.ts`
+#                               memaksa pool=1 dan 24 transaksi paralel, sehingga
+#                               regresi `maxWait` (P2028 / HTTP 500) langsung merah.
 #   6. Playwright e2e         — UI desktop terhadap API + web yang berjalan sungguhan,
 #                               memakai fixture dari `pnpm qa:seed:e2e`
 #

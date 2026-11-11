@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:unit": "vitest run --config vitest.unit.config.ts",
     "test:integration": "vitest run test/integration",
+    "test:load": "vitest run test/integration/transaction-pool-load.integration.test.ts",
     "test:integration:watch": "vitest test/integration",
     "test:e2e:resend": "vitest run --config vitest.e2e.config.ts test/e2e/resend.e2e.test.ts"
   },
