@@ -34,6 +34,15 @@ export interface TenantDetail extends TenantSummary {
   activatedAt: string | null;
 }
 
+export interface SubscriptionInvoiceSummary {
+  id: string;
+  tenantId: string;
+  amount: string;
+  currency: string;
+  expiresAt: string;
+  createdAt: string;
+}
+
 export interface Paged<T> {
   data: T[];
   page: number;

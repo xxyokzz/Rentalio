@@ -4,7 +4,8 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { adminApi, describeRequestError, isReauthenticationRequired } from "@/shared/api/client";
 import { ReauthPrompt } from "@/features/auth/reauth-prompt";
-import type { TenantStatus } from "@/shared/api/types";
+import type { SubscriptionInvoiceSummary, TenantStatus } from "@/shared/api/types";
+import { EmptyState } from "@/shared/ui/states";
 
 interface ActionProps {
   tenantId: string;
@@ -152,7 +153,11 @@ export function TenantStatusPanel({ tenantId, status, permissions }: ActionProps
  * QRIS dinamis tidak punya callback: operator menandai tagihan lunas setelah
  * dana terverifikasi. API memvalidasi status PENDING dan mencatat referensi.
  */
-export function SettleInvoicePanel({ tenantId, permissions }: Omit<ActionProps, "status">) {
+export function SettleInvoicePanel({
+  tenantId,
+  permissions,
+  pendingInvoices,
+}: Omit<ActionProps, "status"> & { pendingInvoices: SubscriptionInvoiceSummary[] | null }) {
   const router = useRouter();
   const [invoiceId, setInvoiceId] = useState("");
   const [paidAmount, setPaidAmount] = useState("");
@@ -176,6 +181,28 @@ export function SettleInvoicePanel({ tenantId, permissions }: Omit<ActionProps, 
             Role Anda tidak memiliki izin <span className="mono">platform.subscriptions.settle</span>{" "}
             untuk menandai tagihan lunas.
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  // `null` berarti daftar tidak dapat dibaca (mis. role tanpa izin baca):
+  // panel tetap menampilkan form, bukan klaim "tidak ada tagihan".
+  if (pendingInvoices !== null && pendingInvoices.length === 0) {
+    return (
+      <div className="panel">
+        <div className="panel__head">
+          <h2 className="panel__title">Tagihan langganan</h2>
+          <span className="subtle">Hanya tagihan berstatus PENDING</span>
+        </div>
+        <div className="panel__body">
+          <EmptyState title="Tidak ada tagihan PENDING">
+            <p className="subtle">
+              Tenant ini tidak punya tagihan yang menunggu pembayaran, jadi tidak ada yang bisa
+              ditandai lunas. Tagihan baru dibuat dari aplikasi tenant saat memperpanjang
+              langganan.
+            </p>
+          </EmptyState>
         </div>
       </div>
     );

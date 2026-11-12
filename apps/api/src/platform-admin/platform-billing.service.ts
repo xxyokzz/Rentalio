@@ -8,6 +8,7 @@ import { recordPlatformAudit } from './platform-admin.audit.js';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type SettleContext = { adminId: string; correlationId: string };
+type ListContext = { adminId: string; correlationId: string };
 
 export interface SettleInvoiceInput {
   paidAmount?: number;
@@ -106,6 +107,48 @@ export class PlatformBillingService {
         paidAmount: String(Math.trunc(paidAmount)),
         channel: input.channel ?? 'QRIS',
       },
+    };
+  }
+
+  /**
+   * Daftar tagihan PENDING satu tenant untuk panel settle.
+   *
+   * Dibaca pada konteks tenant (`withTenant`) sehingga RLS tetap menjadi batas,
+   * dan setiap pembacaan dicatat `PLATFORM_SUBSCRIPTION_INVOICES_VIEWED`.
+   * Respons sengaja minimal (id, nominal, kedaluwarsa) — tanpa payload QRIS.
+   */
+  async listPendingInvoices(tenantId: string, context: ListContext) {
+    if (!UUID_PATTERN.test(tenantId)) {
+      throw new ApiError(ErrorCode.VALIDATION_ERROR, 'ID tenant harus UUID.');
+    }
+
+    const invoices = await this.prisma.withTenant(tenantId, async (tx) => {
+      const rows = await tx.subscriptionInvoice.findMany({
+        where: { tenantId, status: SubscriptionInvoiceStatus.PENDING },
+        orderBy: [{ expiresAt: 'asc' }, { id: 'asc' }],
+        take: 20,
+        select: { id: true, amount: true, currency: true, expiresAt: true, createdAt: true },
+      });
+      await recordPlatformAudit(tx, {
+        actorAdminId: context.adminId,
+        action: 'PLATFORM_SUBSCRIPTION_INVOICES_VIEWED',
+        targetType: 'tenant',
+        targetId: tenantId,
+        correlationId: context.correlationId,
+        metadata: { tenantId, count: rows.length },
+      });
+      return rows;
+    });
+
+    return {
+      data: invoices.map((invoice) => ({
+        id: invoice.id,
+        tenantId,
+        amount: invoice.amount.toString(),
+        currency: invoice.currency,
+        expiresAt: invoice.expiresAt.toISOString(),
+        createdAt: invoice.createdAt.toISOString(),
+      })),
     };
   }
 

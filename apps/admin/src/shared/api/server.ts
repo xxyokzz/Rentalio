@@ -7,6 +7,7 @@ import type {
   PlatformAdminDetail,
   PlatformAdminPrincipal,
   PlatformAdminSummary,
+  SubscriptionInvoiceSummary,
   TenantDetail,
   TenantStatus,
   TenantSummary,
@@ -99,6 +100,13 @@ export function listTenants(input: {
 export async function getTenant(tenantId: string): Promise<TenantDetail> {
   const payload = await request<{ data: TenantDetail }>(
     `/platform-admin/tenants/${encodeURIComponent(tenantId)}`,
+  );
+  return payload.data;
+}
+
+export async function listPendingInvoices(tenantId: string): Promise<SubscriptionInvoiceSummary[]> {
+  const payload = await request<{ data: SubscriptionInvoiceSummary[] }>(
+    `/platform-admin/tenants/${encodeURIComponent(tenantId)}/subscription-invoices`,
   );
   return payload.data;
 }

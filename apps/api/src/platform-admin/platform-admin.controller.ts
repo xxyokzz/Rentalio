@@ -247,6 +247,24 @@ export class PlatformAdminController {
     });
   }
 
+  @Get('tenants/:tenantId/subscription-invoices')
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(PlatformAdminGuard, PlatformPermissionGuard)
+  @RequirePlatformPermission('platform.subscriptions.read')
+  @ApiOperation({
+    summary: 'Daftar tagihan langganan PENDING satu tenant — setiap pembacaan diaudit',
+  })
+  async listSubscriptionInvoices(
+    @Param('tenantId') tenantId: string,
+    @CurrentPlatformAdmin() principal: PlatformAdminPrincipal,
+    @Req() req: Request,
+  ) {
+    return this.billing.listPendingInvoices(tenantId, {
+      adminId: principal.id,
+      correlationId: req.correlationId ?? 'unknown',
+    });
+  }
+
   @Post('tenants/:tenantId/subscription-invoices/:invoiceId/settle')
   @HttpCode(200)
   @Header('Cache-Control', 'no-store')

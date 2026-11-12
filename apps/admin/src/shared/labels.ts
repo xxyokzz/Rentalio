@@ -82,6 +82,7 @@ export const AUDIT_ACTIONS = [
   "PLATFORM_ADMIN_DIRECTORY_VIEWED",
   "PLATFORM_ADMIN_DETAIL_VIEWED",
   "PLATFORM_SUBSCRIPTION_INVOICE_SETTLED",
+  "PLATFORM_SUBSCRIPTION_INVOICES_VIEWED",
 ] as const;
 
 /** Role yang di-seed migrasi `platform_admin_identity`. */

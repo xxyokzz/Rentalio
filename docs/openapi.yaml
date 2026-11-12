@@ -8200,6 +8200,53 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorBody'
 
+  /platform-admin/tenants/{tenantId}/subscription-invoices:
+    x-implementation-status: implemented
+    get:
+      tags: [ Platform Admin ]
+      operationId: platformAdminListSubscriptionInvoices
+      x-required-permission: platform.subscriptions.read
+      security:
+        - platformAdminCookie: []
+      summary: Tagihan langganan PENDING satu tenant — maksimal 20 baris
+      description: >-
+        Dipakai panel settle di konsol admin agar operator tahu apakah tenant masih punya tagihan yang menunggu pembayaran. Dibaca pada konteks tenant (`app.tenant_id`) sehingga RLS tetap menjadi batas; hanya status `PENDING` yang dikembalikan, maksimal 20 baris, tanpa payload QRIS. Setiap pembacaan menulis `PLATFORM_SUBSCRIPTION_INVOICES_VIEWED` pada `platform_audit_events`. Role tanpa `platform.subscriptions.read` dijawab `403 PERMISSION_DENIED`.
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+      responses:
+        '200':
+          description: Daftar tagihan PENDING (boleh kosong)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ data ]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      type: object
+                      required: [ id, tenantId, amount, currency, expiresAt, createdAt ]
+                      properties:
+                        id: { type: string, format: uuid }
+                        tenantId: { type: string, format: uuid }
+                        amount: { type: string, example: '149000' }
+                        currency: { type: string, example: IDR }
+                        expiresAt: { type: string, format: date-time }
+                        createdAt: { type: string, format: date-time }
+        '400':
+          description: Parameter tenant bukan UUID
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorBody' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Sesi admin tidak memiliki `platform.subscriptions.read`
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorBody' }
+
   /platform-admin/tenants/{tenantId}/subscription-invoices/{invoiceId}/settle:
     x-implementation-status: implemented
     post:
@@ -8308,6 +8355,8 @@ paths:
               - PLATFORM_ADMIN_ROLE_REVOKED
               - PLATFORM_ADMIN_DIRECTORY_VIEWED
               - PLATFORM_ADMIN_DETAIL_VIEWED
+              - PLATFORM_SUBSCRIPTION_INVOICE_SETTLED
+              - PLATFORM_SUBSCRIPTION_INVOICES_VIEWED
         - name: from
           in: query
           required: false

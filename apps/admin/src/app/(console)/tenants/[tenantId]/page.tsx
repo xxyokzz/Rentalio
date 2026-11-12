@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { AdminApiError, getAdminSession, getTenant } from "@/shared/api/server";
+import { AdminApiError, getAdminSession, getTenant, listPendingInvoices } from "@/shared/api/server";
 import { describeApiError } from "@/shared/api/errors";
-import type { TenantDetail } from "@/shared/api/types";
+import type { SubscriptionInvoiceSummary, TenantDetail } from "@/shared/api/types";
 import { TENANT_STATUS_LABELS, TENANT_STATUS_TONES } from "@/shared/labels";
 import { formatDate, formatDateTime } from "@/shared/format";
 import { ErrorPanel } from "@/shared/ui/states";
@@ -29,6 +29,18 @@ export default async function TenantDetailPage({
   }
 
   const session = await getAdminSession();
+
+  // Panel settle perlu tahu apakah masih ada tagihan PENDING. Kegagalan baca
+  // (mis. role tanpa `platform.subscriptions.read`) tidak boleh menggagalkan
+  // halaman: panel diberi `null` dan tetap menampilkan form.
+  let pendingInvoices: SubscriptionInvoiceSummary[] | null = null;
+  if (tenant) {
+    try {
+      pendingInvoices = await listPendingInvoices(tenant.id);
+    } catch (error) {
+      if (!(error instanceof AdminApiError)) throw error;
+    }
+  }
 
   return (
     <div className="page">
@@ -91,7 +103,11 @@ export default async function TenantDetailPage({
             permissions={session?.permissions ?? []}
           />
 
-          <SettleInvoicePanel tenantId={tenant.id} permissions={session?.permissions ?? []} />
+          <SettleInvoicePanel
+            tenantId={tenant.id}
+            permissions={session?.permissions ?? []}
+            pendingInvoices={pendingInvoices}
+          />
         </>
       )}
     </div>
