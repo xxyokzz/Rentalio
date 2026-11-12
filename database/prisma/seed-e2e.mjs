@@ -199,7 +199,10 @@ async function ensureTenantAndSubscription(userId, existingTenantId) {
           timezone: 'Asia/Jakarta',
           currency: 'IDR',
           activatedAt: now,
-          trialEndsAt: new Date(now.getTime() + 72 * 3600 * 1000),
+          // Fixture ini mendapat entitlement dari subscription ACTIVE di bawah,
+          // bukan dari masa coba. Tanggal trial 72 jam akan bertentangan dengan
+          // status "Aktif" di direktori admin dan memicu banner trial di web.
+          trialEndsAt: null,
         },
       });
       changes.push('tenant');
@@ -261,6 +264,18 @@ async function ensureTenantAndSubscription(userId, existingTenantId) {
         },
       });
       changes.push('subscription (diperpanjang)');
+    }
+
+    // Rapikan data lama: tenant fixture yang masih membawa tanggal trial padahal
+    // langganannya sudah ACTIVE membuat direktori admin menampilkan
+    // "Trial berakhir <dekat>" untuk tenant berstatus Aktif.
+    const activeSubscription = await tx.subscription.findFirst({
+      where: { tenantId, status: 'ACTIVE' },
+      select: { id: true },
+    });
+    if (activeSubscription && tenant?.trialEndsAt) {
+      await tx.tenant.update({ where: { id: tenantId }, data: { trialEndsAt: null } });
+      changes.push('tenant (trialEndsAt dikosongkan, entitlement dari subscription ACTIVE)');
     }
 
     return changes;
