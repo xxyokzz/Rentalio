@@ -585,7 +585,17 @@ function BlockPreview({ block, theme }: { block: BlockDef; theme: CatalogTheme }
               )}
             </div>
           ) : (
-            <div style={{ position: "relative", zIndex: 1 }}>
+            <div style={{
+              position: "relative",
+              zIndex: 1,
+              // Tanpa flex kolom, judul dan subjudul (span inline) menempel
+              // jadi satu baris: "...mudah & cepatCek ketersediaan...".
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 6,
+              textAlign: "center",
+            }}>
               <span className="ce-preview-hero-heading" style={{ fontFamily: theme.fontFamily }}>{cfg.heading || "Judul toko"}</span>
               <span className="ce-preview-hero-sub">{cfg.subheading || "Subjudul"}</span>
               {cfg.showCta !== false && (
