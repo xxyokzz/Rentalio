@@ -66,7 +66,10 @@ export function StaffPage() {
                 <tbody>
                   {items.map((member) => (
                     <tr key={member.userId}>
-                      <td className="mono text-sm">{member.userId}</td>
+                      <td className="text-sm">
+                        <div className="table__primary">{member.email}</div>
+                        {member.ownerName ? <div className="subtle">{member.ownerName}</div> : null}
+                      </td>
                       <td>
                         <Badge tone={member.role === "OWNER" ? "info" : "neutral"}>
                           {member.role ? ROLE_LABEL[member.role as Role] : "—"}

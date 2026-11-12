@@ -324,15 +324,31 @@ export class TenantService {
   async listMembers(
     tenantId: string,
     actorUserId: string,
-  ): Promise<{ userId: string; role: string; status: string; permissions: string[]; activatedAt: Date | null }[]> {
+  ): Promise<
+    {
+      userId: string;
+      email: string;
+      ownerName: string | null;
+      role: string;
+      status: string;
+      permissions: string[];
+      activatedAt: Date | null;
+    }[]
+  > {
     await this.requireMembership(tenantId, actorUserId, ['OWNER']);
     return this.prisma.withTenant(tenantId, async (tx) => {
       const members = await tx.tenantMembership.findMany({
         where: { tenantId },
         orderBy: { createdAt: 'asc' },
+        // Tabel `users` tidak ber-RLS, jadi email pendamping aman dibaca dalam
+        // konteks tenant. Tanpa ini UI hanya punya userId dan operator tidak
+        // bisa mengenali siapa stafnya.
+        include: { user: { select: { email: true, ownerName: true } } },
       });
       return members.map((m) => ({
         userId: m.userId,
+        email: m.user.email,
+        ownerName: m.user.ownerName ?? null,
         role: m.role,
         status: m.status,
         permissions: m.permissions,

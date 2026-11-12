@@ -2105,6 +2105,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/platform-admin/tenants/{tenantId}/subscription-invoices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Tagihan langganan PENDING satu tenant — maksimal 20 baris
+         * @description Dipakai panel settle di konsol admin agar operator tahu apakah tenant masih punya tagihan yang menunggu pembayaran. Dibaca pada konteks tenant (`app.tenant_id`) sehingga RLS tetap menjadi batas; hanya status `PENDING` yang dikembalikan, maksimal 20 baris, tanpa payload QRIS. Setiap pembacaan menulis `PLATFORM_SUBSCRIPTION_INVOICES_VIEWED` pada `platform_audit_events`. Role tanpa `platform.subscriptions.read` dijawab `403 PERMISSION_DENIED`.
+         */
+        get: operations["platformAdminListSubscriptionInvoices"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/platform-admin/tenants/{tenantId}/subscription-invoices/{invoiceId}/settle": {
         parameters: {
             query?: never;
@@ -2465,6 +2485,12 @@ export interface components {
         MemberResponse: {
             /** Format: uuid */
             userId?: string;
+            /**
+             * Format: email
+             * @description Email akun member agar operator bisa mengenali staf tanpa membuka userId.
+             */
+            email?: string;
+            ownerName?: string | null;
             /** @enum {string} */
             role?: "OWNER" | "MANAGER" | "STAFF" | "CASHIER";
             /** @enum {string} */
@@ -9059,6 +9085,62 @@ export interface operations {
             };
         };
     };
+    platformAdminListSubscriptionInvoices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Daftar tagihan PENDING (boleh kosong) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: {
+                            /** Format: uuid */
+                            id: string;
+                            /** Format: uuid */
+                            tenantId: string;
+                            /** @example 149000 */
+                            amount: string;
+                            /** @example IDR */
+                            currency: string;
+                            /** Format: date-time */
+                            expiresAt: string;
+                            /** Format: date-time */
+                            createdAt: string;
+                        }[];
+                    };
+                };
+            };
+            /** @description Parameter tenant bukan UUID */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            /** @description Sesi admin tidak memiliki `platform.subscriptions.read` */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
     platformAdminSettleSubscriptionInvoice: {
         parameters: {
             query?: never;
@@ -9146,7 +9228,7 @@ export interface operations {
             query?: {
                 /** @description Hanya event dengan aktor admin tersebut (UUID). */
                 actorAdminId?: string;
-                action?: "PLATFORM_ADMIN_BOOTSTRAPPED" | "PLATFORM_ADMIN_LOGIN_FAILED" | "PLATFORM_ADMIN_MFA_ENROLLMENT_STARTED" | "PLATFORM_ADMIN_MFA_ENROLLED" | "PLATFORM_ADMIN_MFA_CHALLENGE_ISSUED" | "PLATFORM_ADMIN_LOGIN_SUCCEEDED" | "PLATFORM_ADMIN_RECOVERY_CODE_USED" | "PLATFORM_ADMIN_LOGOUT" | "PLATFORM_TENANT_DIRECTORY_VIEWED" | "PLATFORM_TENANT_SUMMARY_VIEWED" | "PLATFORM_TENANT_SUSPENDED" | "PLATFORM_TENANT_REACTIVATED" | "PLATFORM_ADMIN_ROLE_ASSIGNED" | "PLATFORM_ADMIN_ROLE_REVOKED" | "PLATFORM_ADMIN_DIRECTORY_VIEWED" | "PLATFORM_ADMIN_DETAIL_VIEWED";
+                action?: "PLATFORM_ADMIN_BOOTSTRAPPED" | "PLATFORM_ADMIN_LOGIN_FAILED" | "PLATFORM_ADMIN_MFA_ENROLLMENT_STARTED" | "PLATFORM_ADMIN_MFA_ENROLLED" | "PLATFORM_ADMIN_MFA_CHALLENGE_ISSUED" | "PLATFORM_ADMIN_LOGIN_SUCCEEDED" | "PLATFORM_ADMIN_RECOVERY_CODE_USED" | "PLATFORM_ADMIN_LOGOUT" | "PLATFORM_TENANT_DIRECTORY_VIEWED" | "PLATFORM_TENANT_SUMMARY_VIEWED" | "PLATFORM_TENANT_SUSPENDED" | "PLATFORM_TENANT_REACTIVATED" | "PLATFORM_ADMIN_ROLE_ASSIGNED" | "PLATFORM_ADMIN_ROLE_REVOKED" | "PLATFORM_ADMIN_DIRECTORY_VIEWED" | "PLATFORM_ADMIN_DETAIL_VIEWED" | "PLATFORM_SUBSCRIPTION_INVOICE_SETTLED" | "PLATFORM_SUBSCRIPTION_INVOICES_VIEWED";
                 /** @description Batas bawah `createdAt` (inklusif), ISO 8601. */
                 from?: string;
                 /** @description Batas atas `createdAt` (inklusif), ISO 8601. */
