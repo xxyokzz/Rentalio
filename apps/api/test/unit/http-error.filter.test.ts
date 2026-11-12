@@ -48,7 +48,7 @@ const p2028 = Object.assign(
 );
 
 describe('HttpErrorFilter — peringatan dini 5xx', () => {
-  it('melaporkan 5xx beserta konteks request ke layanan alert', () => {
+  it('melaporkan 5xx beserta konteks request ke layanan alert', async () => {
     const { filter, reported } = createFilter();
     const { host, response } = createHost({
       method: 'GET',
@@ -57,7 +57,7 @@ describe('HttpErrorFilter — peringatan dini 5xx', () => {
       session: { userId: 'user-1', tenantSlug: 'demo-sewa' },
     });
 
-    filter.catch(new Error('boom', { cause: p2028 }), host);
+    await filter.catch(new Error('boom', { cause: p2028 }), host);
 
     expect(response.statusCode).toBe(500);
     expect(reported).toHaveLength(1);
@@ -73,7 +73,7 @@ describe('HttpErrorFilter — peringatan dini 5xx', () => {
     expect(reported[0]?.error).toBeInstanceOf(Error);
   });
 
-  it('tidak melaporkan respons 4xx', () => {
+  it('tidak melaporkan respons 4xx', async () => {
     const { filter, reported } = createFilter();
     const { host, response } = createHost({
       method: 'GET',
@@ -81,7 +81,7 @@ describe('HttpErrorFilter — peringatan dini 5xx', () => {
       correlationId: 'corr-10',
     });
 
-    filter.catch(new ApiError(ErrorCode.NOT_FOUND, 'Tidak ditemukan.'), host);
+    await filter.catch(new ApiError(ErrorCode.NOT_FOUND, 'Tidak ditemukan.'), host);
 
     expect(response.statusCode).toBe(404);
     expect(reported).toHaveLength(0);

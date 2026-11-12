@@ -31,7 +31,7 @@ export class HttpErrorFilter implements ExceptionFilter {
     this.alerts = alerts;
   }
 
-  catch(exception: unknown, host: ArgumentsHost): void {
+  async catch(exception: unknown, host: ArgumentsHost): Promise<void> {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request & { correlationId?: string }>();
@@ -84,10 +84,12 @@ export class HttpErrorFilter implements ExceptionFilter {
 
     if (status >= 500) {
       const session = request.session;
-      // Tidak ditunggu: peringatan tidak boleh menambah latensi atau menggagalkan
-      // response. Service menulis log `api_failure_alert` per kegagalan dan
-      // mengirim email ringkasan yang dibatasi cooldown.
-      void this.alerts?.report({
+      // Ditunggu dengan batas waktu di dalam service: function serverless
+      // dibekukan begitu response selesai, sehingga pengiriman fire-and-forget
+      // bisa hilang tanpa jejak. `report` tidak pernah melempar dan email
+      // dibatasi cooldown, jadi hanya 5xx pertama per jendela yang menambah
+      // latensi (maksimal beberapa detik).
+      await this.alerts?.report({
         status,
         code,
         method: request.method,

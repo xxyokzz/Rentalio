@@ -22,8 +22,12 @@ import { EmailService } from '../email/email.service.js';
  * Service ini tidak boleh menggagalkan response: pemanggil tidak menunggu dan
  * semua error internal ditelan (dicatat sebagai `api_alert_failed`).
  */
-/** Batas waktu kirim email; kegagalan Resend tidak boleh menahan request. */
-const SEND_TIMEOUT_MS = 5_000;
+/**
+ * Batas waktu kirim email. Pemanggil menunggu (function serverless dibekukan
+ * setelah response), jadi batas ini juga menjadi tambahan latensi maksimum
+ * untuk 5xx pertama per jendela cooldown.
+ */
+const SEND_TIMEOUT_MS = 3_000;
 const TRANSACTION_QUEUE_CODES = new Set(['P2028']);
 const TRANSACTION_QUEUE_MESSAGE = /P2028|Unable to start a transaction/i;
 
