@@ -1074,3 +1074,228 @@ describe('Integritas — composite foreign key tenant', () => {
     ).rejects.toMatchObject({ code: 'P2003' });
   });
 });
+// ============================================================
+// Pengembalian terlambat & denda kondisi
+// ============================================================
+
+/**
+ * Celah yang ditutup di sini: alur pengembalian diuji hanya sampai status dan
+ * denda pada inspeksi, tanpa membuktikan dampaknya ke uang (tagihan order,
+ * pembayaran, refund). Dua perilaku berikut dikunci:
+ * - Keterlambatan tidak membuat denda otomatis; denda hanya lahir dari
+ *   keputusan inspeksi (nominal manual, tercatat pada inspeksi).
+ * - Refund pembayaran tetap dibatasi nilai pembayaran dan tidak otomatis
+ *   dipotong denda kondisi.
+ */
+describe('Pengembalian terlambat & denda kondisi — dampak ke tagihan dan refund', () => {
+  /** Order ACTIVE, barang dikembalikan 2 hari setelah endAt reservasi fixture. */
+  async function setupLateReturn(
+    prefix: string,
+    opts: { withManager?: boolean } = {},
+  ): Promise<{ fx: Fixture; returnId: string }> {
+    const fx = await setupOrder(prefix, opts);
+    const ready = await auth(
+      request(server).post(`${base(fx.tenantId)}/orders/${fx.orderId}/ready-for-handover`),
+      fx.owner,
+    ).send({});
+    expect(ready.status, JSON.stringify(ready.body)).toBe(200);
+    const handover = await auth(
+      request(server).post(`${base(fx.tenantId)}/orders/${fx.orderId}/handover`),
+      fx.owner,
+    ).send({ conditionNotes: 'Unit lengkap saat serah-terima' });
+    expect(handover.status, JSON.stringify(handover.body)).toBe(200);
+
+    const created = await auth(
+      request(server).post(`${base(fx.tenantId)}/orders/${fx.orderId}/returns`),
+      fx.owner,
+    ).send({ items: [{ productId: fx.productId, quantity: 1 }] });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+
+    // Reservasi fixture berakhir 2026-11-03; barang baru diterima 2026-11-05.
+    const completed = await auth(
+      request(server).patch(`${base(fx.tenantId)}/returns/${created.body.data.id}/complete`),
+      fx.owner,
+    ).send({ receivedAt: '2026-11-05T09:00:00.000Z', notes: 'Diterima terlambat 2 hari' });
+    expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+
+    return { fx, returnId: created.body.data.id as string };
+  }
+
+  async function approveInspection(
+    fx: Fixture,
+    returnId: string,
+    penaltyAmount: number,
+    summary: string,
+  ): Promise<string> {
+    const inspection = await auth(
+      request(server).post(`${base(fx.tenantId)}/orders/${fx.orderId}/inspections`),
+      fx.owner,
+    ).send({ returnRecordId: returnId, summary });
+    expect(inspection.status, JSON.stringify(inspection.body)).toBe(201);
+    const inspectionId = inspection.body.data.id as string;
+
+    const submitted = await auth(
+      request(server).patch(`${base(fx.tenantId)}/inspections/${inspectionId}/submit`),
+      fx.owner,
+    ).send({ penaltyAmount, summary });
+    expect(submitted.status, JSON.stringify(submitted.body)).toBe(200);
+
+    const decided = await auth(
+      request(server).patch(`${base(fx.tenantId)}/inspections/${inspectionId}/decision`),
+      fx.owner,
+    ).send({ decision: 'APPROVE', penaltyAmount });
+    expect(decided.status, JSON.stringify(decided.body)).toBe(200);
+    return inspectionId;
+  }
+
+  it('pengembalian terlambat tidak membuat denda otomatis dan tidak mengubah tagihan', async () => {
+    const { fx, returnId } = await setupLateReturn('retlate');
+
+    const ret = await auth(
+      request(server).get(`${base(fx.tenantId)}/returns/${returnId}`),
+      fx.owner,
+    );
+    expect(ret.status).toBe(200);
+    expect(ret.body.data.status).toBe('COMPLETED');
+    expect(ret.body.data.returnedAt).toBe('2026-11-05T09:00:00.000Z');
+    expect(ret.body.data.inspections).toEqual([]);
+
+    const order = await auth(
+      request(server).get(`${base(fx.tenantId)}/orders/${fx.orderId}`),
+      fx.owner,
+    );
+    expect(order.body.data.status).toBe('RETURN_IN_PROGRESS');
+    expect(order.body.data.totalAmount).toBe(fx.totalAmount);
+    expect(order.body.data.paidAmount).toBe('0');
+    expect(order.body.data.outstandingAmount).toBe(fx.totalAmount);
+
+    const inspections = await auth(
+      request(server).get(`${base(fx.tenantId)}/orders/${fx.orderId}/inspections`),
+      fx.owner,
+    );
+    expect(inspections.body.data).toEqual([]);
+
+    const payments = await auth(
+      request(server).get(`${base(fx.tenantId)}/orders/${fx.orderId}/payments`),
+      fx.owner,
+    );
+    expect(payments.body.data).toEqual([]);
+    const refunds = await auth(
+      request(server).get(`${base(fx.tenantId)}/orders/${fx.orderId}/refunds`),
+      fx.owner,
+    );
+    expect(refunds.body.data).toEqual([]);
+
+    // Tanpa denda pun order tetap bisa diselesaikan setelah barang diterima.
+    const done = await auth(
+      request(server).post(`${base(fx.tenantId)}/orders/${fx.orderId}/complete`),
+      fx.owner,
+    ).send({ settlementNote: 'Selesai tanpa denda' });
+    expect(done.status, JSON.stringify(done.body)).toBe(200);
+    expect(done.body.data.status).toBe('COMPLETED');
+  });
+
+  it('denda keterlambatan dari inspeksi tercatat di inspeksi tanpa mengubah tagihan order', async () => {
+    const { fx, returnId } = await setupLateReturn('retpenalty');
+    const inspectionId = await approveInspection(
+      fx,
+      returnId,
+      // 2 hari terlambat x 100.000/hari (tarif produk fixture)
+      200_000,
+      'Terlambat 2 hari',
+    );
+
+    const inspection = await auth(
+      request(server).get(`${base(fx.tenantId)}/inspections/${inspectionId}`),
+      fx.owner,
+    );
+    expect(inspection.status).toBe(200);
+    expect(inspection.body.data.status).toBe('APPROVED');
+    expect(inspection.body.data.penaltyAmount).toBe('200000');
+    expect(inspection.body.data.currency).toBe('IDR');
+
+    const order = await auth(
+      request(server).get(`${base(fx.tenantId)}/orders/${fx.orderId}`),
+      fx.owner,
+    );
+    expect(order.body.data.totalAmount).toBe(fx.totalAmount);
+    expect(order.body.data.paidAmount).toBe('0');
+    expect(order.body.data.outstandingAmount).toBe(fx.totalAmount);
+
+    // Denda bukan pembayaran dan bukan refund: keduanya tetap kosong.
+    const payments = await auth(
+      request(server).get(`${base(fx.tenantId)}/orders/${fx.orderId}/payments`),
+      fx.owner,
+    );
+    expect(payments.body.data).toEqual([]);
+    const refunds = await auth(
+      request(server).get(`${base(fx.tenantId)}/orders/${fx.orderId}/refunds`),
+      fx.owner,
+    );
+    expect(refunds.body.data).toEqual([]);
+
+    const audits = await prisma.withTenant(fx.tenantId, (tx) =>
+      tx.auditLog.findMany({
+        where: { tenantId: fx.tenantId, action: 'INSPECTION_DECIDED' },
+      }),
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].entityId).toBe(inspectionId);
+  });
+
+  it('refund setelah denda kondisi tetap dibatasi nilai pembayaran dan tidak mengubah denda', async () => {
+    const { fx, returnId } = await setupLateReturn('retcondrefund', { withManager: true });
+    const paymentId = await recordPayment(fx, fx.totalAmount);
+    const inspectionId = await approveInspection(
+      fx,
+      returnId,
+      150_000,
+      'Lensa lecet saat dikembalikan',
+    );
+
+    const requested = await auth(
+      request(server).post(`${base(fx.tenantId)}/orders/${fx.orderId}/refunds`),
+      fx.owner,
+    ).send({
+      paymentId,
+      amount: '100000',
+      currency: 'IDR',
+      reason: 'Kerusakan sudah diputuskan lewat inspeksi',
+      reference: 'RF-COND-1',
+    });
+    expect(requested.status, JSON.stringify(requested.body)).toBe(201);
+    expect(requested.body.data.status).toBe('REQUESTED');
+    expect(requested.body.data.refundableAmount).toBe('300000');
+
+    const approved = await auth(
+      request(server).post(`${base(fx.tenantId)}/refunds/${requested.body.data.id}/approve`),
+      fx.manager,
+    ).send({ reason: 'Sesuai keputusan inspeksi' });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+
+    const result = await auth(
+      request(server).post(`${base(fx.tenantId)}/refunds/${requested.body.data.id}/record-result`),
+      fx.manager,
+    ).send({ status: 'SUCCEEDED', reference: 'TRF-COND-1' });
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(result.body.data.status).toBe('SUCCEEDED');
+    expect(result.body.data.refundedAmount).toBe('100000');
+    expect(result.body.data.refundableAmount).toBe('300000');
+
+    // Denda kondisi tetap utuh dan tidak ikut menjadi refund.
+    const inspection = await auth(
+      request(server).get(`${base(fx.tenantId)}/inspections/${inspectionId}`),
+      fx.owner,
+    );
+    expect(inspection.body.data.penaltyAmount).toBe('150000');
+    expect(inspection.body.data.status).toBe('APPROVED');
+
+    const payments = await auth(
+      request(server).get(`${base(fx.tenantId)}/orders/${fx.orderId}/payments`),
+      fx.owner,
+    );
+    expect(payments.body.data).toHaveLength(1);
+    expect(payments.body.data[0].status).toBe('RECORDED');
+    expect(payments.body.data[0].amount).toBe(fx.totalAmount);
+  });
+});
