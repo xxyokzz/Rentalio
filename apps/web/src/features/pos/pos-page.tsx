@@ -635,7 +635,17 @@ function CheckoutSummary({
       ) : null}
 
       <p className="text-xs text-muted">
-        Butuh ubah jumlah atau perpanjangan? Lanjutkan dari <Link href="/app/orders">detail pesanan</Link>.
+        {order?.id ? (
+          <>
+            Butuh ubah jumlah atau perpanjangan? Lanjutkan dari{" "}
+            <Link href={`/app/orders/${order.id}`}>detail pesanan</Link>.
+          </>
+        ) : (
+          <>
+            Perubahan jumlah dan perpanjangan baru bisa dilakukan setelah pesanan dibuat, yaitu setelah
+            booking disetujui di <Link href="/app/orders">daftar pesanan</Link>.
+          </>
+        )}
       </p>
     </div>
   );

@@ -322,7 +322,10 @@ export function OrderDetail({ orderId }: { orderId: string }) {
               ) : null}
             </Tabs>
 
+            {/* `key` me-remount dialog setiap kali dibuka: waktu default dan pesan
+                error lama tidak terbawa dari pembukaan sebelumnya. */}
             <HandoverDialog
+              key={handoverOpen ? "handover-open" : "handover-closed"}
               open={handoverOpen}
               onClose={() => setHandoverOpen(false)}
               tenantId={tenantId}
@@ -333,7 +336,6 @@ export function OrderDetail({ orderId }: { orderId: string }) {
                 setHandoverOpen(false);
                 state.reload();
               }}
-              onError={(message) => notify(message, "error")}
             />
 
             <ConfirmDialog
@@ -371,7 +373,6 @@ function HandoverDialog({
   orderId,
   timezone,
   onSaved,
-  onError,
 }: {
   open: boolean;
   onClose: () => void;
@@ -379,27 +380,35 @@ function HandoverDialog({
   orderId: string;
   timezone: string;
   onSaved: () => void;
-  onError: (message: string) => void;
 }) {
   const [handoverAt, setHandoverAt] = useState(isoToZonedLocal(new Date().toISOString(), timezone));
   const [conditionNotes, setConditionNotes] = useState("");
   const [evidence, setEvidence] = useState("");
   const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!tenantId) return;
+    setFormError(null);
+    // Kesalahan ditampilkan di dalam dialog (persisten), bukan toast sekilas
+    // yang mudah terlewat sehingga pengguna merasa tombol tidak bekerja.
+    if (!tenantId) {
+      setFormError("Sesi toko belum siap. Muat ulang halaman lalu coba lagi.");
+      return;
+    }
     const iso = zonedLocalToIso(handoverAt, timezone);
     if (!iso) {
-      onError("Waktu serah-terima tidak valid.");
+      setFormError("Waktu serah-terima tidak valid.");
       return;
     }
     if (new Date(iso).getTime() > Date.now() + 60_000) {
-      onError("Waktu serah-terima tidak boleh di masa depan.");
+      setFormError(
+        "Waktu serah-terima tidak boleh di masa depan. Samakan jam perangkat ini dengan waktu server, lalu coba lagi.",
+      );
       return;
     }
     if (conditionNotes.trim().length < 3) {
-      onError("Catat kondisi awal barang minimal 3 karakter.");
+      setFormError("Catat kondisi awal barang minimal 3 karakter.");
       return;
     }
     setBusy(true);
@@ -414,7 +423,7 @@ function HandoverDialog({
       });
       onSaved();
     } catch (caught) {
-      onError(describeApiError(caught));
+      setFormError(describeApiError(caught));
     } finally {
       setBusy(false);
     }
@@ -438,6 +447,7 @@ function HandoverDialog({
       }
     >
       <form id="handover" className="stack" onSubmit={submit}>
+        {formError ? <InlineAlert tone="danger">{formError}</InlineAlert> : null}
         <TextInput
           label={`Waktu serah-terima (${timezone})`}
           type="datetime-local"

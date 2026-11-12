@@ -147,7 +147,7 @@ describe("useTenantStatusBadge (label sidebar)", () => {
   it("menampilkan state memuat dan gagal memuat detail", () => {
     tenantLoading = true;
     expect(renderHook(() => useTenantStatusBadge()).result.current).toEqual({
-      label: "Memuat…",
+      label: "…",
       tone: "muted",
     });
     cleanup();

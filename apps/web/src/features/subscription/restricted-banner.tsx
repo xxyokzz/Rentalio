@@ -75,7 +75,9 @@ export function useTenantStatusBadge(): TenantStatusBadge {
   const { tenantLoading, tenantError } = useSession();
   const { tenant, subscription, restricted, status, days } = useSubscriptionState();
 
-  if (tenantLoading) return { label: "Memuat…", tone: "muted" };
+  // Placeholder ringkas: kata "Memuat…" yang bertahan beberapa detik di sidebar
+  // terbaca seperti status macet, bukan indikator singkat.
+  if (tenantLoading) return { label: "…", tone: "muted" };
   if (tenantError) return { label: "Gagal memuat detail", tone: "danger" };
   if (status === "SUSPENDED") return { label: "Toko ditangguhkan", tone: "danger" };
 
