@@ -5,12 +5,18 @@
 #   2. Jalankan `prisma migrate deploy` ke Supabase.
 #   3. Trigger Deploy Hook API, tunggu health, lalu trigger web dan admin.
 #
+# Skema selalu mendahului kode: auto-deploy branch main/master dimatikan di
+# ketiga `vercel.json`, sehingga satu-satunya jalur rilis production adalah
+# workflow ini. Jangan mengaktifkan kembali auto-deploy main, karena Vercel
+# akan menayangkan kode baru sebelum migrasi sempat dijalankan.
+#
 # Vercel Hobby:
 #   - Cron per menit tidak didukung dan akan menggagalkan deployment. Repo ini
 #     tidak mendaftarkan `crons`; jalankan job periodik lewat scheduler
 #     eksternal atau worker long-lived.
 #   - Auto-deploy branch main/master dimatikan di `vercel.json` agar deploy
-#     production hanya terjadi lewat Deploy Hook dari workflow ini.
+#     production hanya terjadi lewat Deploy Hook dari workflow ini. Deploy
+#     preview untuk pull request tetap berjalan.
 #
 # Secrets environment `production`:
 #   SUPABASE_BACKUP_URL           role backup dengan BYPASSRLS/superuser
@@ -194,10 +200,15 @@ jobs:
           DIRECT_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
         run: pnpm db:migrate
 
-      - name: Status migrasi
+      - name: Pastikan tidak ada migrasi tertunda sebelum deploy
         env:
           DIRECT_URL: ${{ secrets.SUPABASE_MIGRATION_URL }}
-        run: pnpm --filter @rentalio/database migrate:status
+        run: |
+          set -euo pipefail
+          # `prisma migrate status` keluar dengan status non-nol bila masih ada
+          # migrasi tertunda atau migrasi gagal, sehingga Deploy Hook di bawah
+          # tidak akan pernah menayangkan kode yang mendahului skemanya.
+          pnpm --filter @rentalio/database migrate:status
 
       - name: Trigger deploy API dan tunggu readiness
         if: ${{ inputs.deploy }}
@@ -217,6 +228,34 @@ jobs:
           done
 
           echo "::error::API belum sehat setelah 20 menit; web/admin tidak dideploy."
+          exit 1
+
+      - name: Smoke test query yang bergantung skema
+        if: ${{ inputs.deploy }}
+        env:
+          API_URL: ${{ secrets.API_HEALTH_URL }}
+        run: |
+          set -euo pipefail
+          # Health check tidak membaca tabel tenant, sehingga kode yang mendahului
+          # migrasi tetap lolos. Endpoint publik di bawah melakukan SELECT nyata
+          # terhadap tabel tenants dan akan gagal 5xx bila skema belum siap.
+          # 404 dianggap lolos: tenant kanari berganti nama, bukan indikasi gagal.
+          BASE="${API_URL%/api/v1/health/ready}"
+          PATH_UNDER_TEST="/api/v1/public/tenants/demo-sewa"
+
+          for attempt in $(seq 1 12); do
+            code="$(curl --silent --output /dev/null --write-out '%{http_code}' "$BASE$PATH_UNDER_TEST" || true)"
+            case "$code" in
+              2*|404)
+                echo "Smoke test lolos (HTTP $code) setelah ${attempt} percobaan."
+                exit 0
+                ;;
+            esac
+            echo "Percobaan ${attempt}: HTTP $code"
+            sleep 10
+          done
+
+          echo "::error::Endpoint publik masih mengembalikan HTTP $code; skema dan kode kemungkinan tidak sinkron."
           exit 1
 
       - name: Trigger deploy web dan admin
