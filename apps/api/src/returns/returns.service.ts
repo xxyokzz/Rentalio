@@ -13,6 +13,7 @@ import type {
   SubmitInspectionDto,
 } from './returns.dto.js';
 import { InspectionDecisionDto } from './returns.dto.js';
+import { computeLateFee, type LateFeePolicy } from './late-fee.js';
 
 type Ctx = { actorUserId: string; correlationId: string };
 
@@ -58,7 +59,10 @@ export class ReturnsService {
         include: { items: true },
         orderBy: { createdAt: 'desc' },
       });
-      return rows.map((row) => this.mapReturn(row));
+      const lateFee = await this.lateFeeContext(tx, tenantId, orderId);
+      return rows.map((row) =>
+        this.mapReturn(row, computeLateFee(lateFee.policy, lateFee.dueAt, row.returnedAt)),
+      );
     });
   }
 
@@ -73,8 +77,9 @@ export class ReturnsService {
         },
       });
       if (!row) throw new ApiError(ErrorCode.NOT_FOUND, 'Return record tidak ditemukan.');
+      const lateFee = await this.lateFeeContext(tx, tenantId, row.orderId);
       return {
-        ...this.mapReturn(row),
+        ...this.mapReturn(row, computeLateFee(lateFee.policy, lateFee.dueAt, row.returnedAt)),
         inspections: row.inspections.map((i) => ({
           id: i.id,
           status: i.status,
@@ -148,7 +153,11 @@ export class ReturnsService {
         tx,
       );
 
-      return this.mapReturn(created);
+      const lateFee = await this.lateFeeContext(tx, tenantId, orderId);
+      return this.mapReturn(
+        created,
+        computeLateFee(lateFee.policy, lateFee.dueAt, created.returnedAt),
+      );
     });
   }
 
@@ -211,7 +220,11 @@ export class ReturnsService {
         tx,
       );
 
-      return this.mapReturn(updated);
+      const lateFee = await this.lateFeeContext(tx, tenantId, existing.orderId);
+      return this.mapReturn(
+        updated,
+        computeLateFee(lateFee.policy, lateFee.dueAt, updated.returnedAt),
+      );
     });
   }
 
@@ -262,7 +275,11 @@ export class ReturnsService {
         tx,
       );
 
-      return this.mapReturn(updated);
+      const lateFee = await this.lateFeeContext(tx, tenantId, existing.orderId);
+      return this.mapReturn(
+        updated,
+        computeLateFee(lateFee.policy, lateFee.dueAt, updated.returnedAt),
+      );
     });
   }
 
@@ -619,7 +636,37 @@ export class ReturnsService {
     }
   }
 
-  private mapReturn(row: ReturnWithItems) {
+  /**
+   * Konfigurasi denda tenant + batas waktu order (endAt item terakhir).
+   * Dihitung dari data server supaya klien tidak bisa mengarang nominal.
+   */
+  private async lateFeeContext(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    orderId: string,
+  ): Promise<{ policy: LateFeePolicy; dueAt: Date | null }> {
+    const [tenant, lastItem] = await Promise.all([
+      tx.tenant.findUnique({
+        where: { id: tenantId },
+        select: { lateFeeEnabled: true, lateFeeUnit: true, lateFeeRateAmount: true },
+      }),
+      tx.rentalItem.findFirst({
+        where: { tenantId, orderId },
+        orderBy: { endAt: 'desc' },
+        select: { endAt: true },
+      }),
+    ]);
+    return {
+      policy: {
+        enabled: tenant?.lateFeeEnabled ?? false,
+        unit: (tenant?.lateFeeUnit ?? 'DAY') as LateFeePolicy['unit'],
+        rateAmount: tenant?.lateFeeRateAmount ?? 0n,
+      },
+      dueAt: lastItem?.endAt ?? null,
+    };
+  }
+
+  private mapReturn(row: ReturnWithItems, lateFee: ReturnType<typeof computeLateFee>) {
     return {
       id: row.id,
       orderId: row.orderId,
@@ -627,6 +674,7 @@ export class ReturnsService {
       returnedAt: row.returnedAt,
       receivedByUserId: row.receivedByUserId,
       notes: row.notes,
+      lateFee,
       items: row.items.map((item) => ({
         id: item.id,
         productId: item.productId,

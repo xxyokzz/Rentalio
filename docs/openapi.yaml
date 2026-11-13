@@ -307,6 +307,16 @@ components:
           type: string
           nullable: true
           format: uri
+        lateFeeEnabled:
+          type: boolean
+          description: Saklar denda keterlambatan pengembalian milik tenant.
+        lateFeeUnit:
+          type: string
+          enum: [ DAY, HOUR ]
+          description: Satuan perhitungan denda yang dipilih owner.
+        lateFeeRateAmount:
+          type: string
+          description: Tarif denda per satuan, IDR rupiah utuh (string agar aman untuk nilai besar).
         activatedAt:
           type: string
           format: date-time
@@ -441,6 +451,17 @@ components:
           format: uri
           maxLength: 2000
           description: URL gambar QRIS publik; string kosong menghapus nilai.
+        lateFeeEnabled:
+          type: boolean
+          description: Saklar denda keterlambatan; wajib disertai tarif lebih dari 0.
+        lateFeeUnit:
+          type: string
+          enum: [ DAY, HOUR ]
+          description: Satuan perhitungan denda, per hari atau per jam.
+        lateFeeRateAmount:
+          type: integer
+          minimum: 0
+          description: Tarif denda per satuan dalam IDR rupiah utuh.
 
     InviteMemberRequest:
       type: object
@@ -1024,12 +1045,44 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ReturnItemResponse'
+        lateFee:
+          $ref: '#/components/schemas/LateFeeResponse'
         createdAt:
           type: string
           format: date-time
         updatedAt:
           type: string
           format: date-time
+
+    LateFeeResponse:
+      type: object
+      description: >-
+        Denda keterlambatan yang dihitung server dari `returnedAt` terhadap `endAt`
+        order. Nilainya usulan untuk inspeksi, bukan tambahan tagihan otomatis.
+      properties:
+        enabled:
+          type: boolean
+        unit:
+          type: string
+          enum: [ DAY, HOUR ]
+        rateAmount:
+          type: string
+          description: Tarif per satuan, IDR rupiah utuh.
+        dueAt:
+          type: [ string, 'null' ]
+          format: date-time
+        returnedAt:
+          type: [ string, 'null' ]
+          format: date-time
+        overdueMs:
+          type: integer
+          description: Selisih milidetik antara waktu terima dan batas waktu (0 bila tidak telat).
+        units:
+          type: integer
+          description: Jumlah satuan keterlambatan (dibulatkan ke atas).
+        amount:
+          type: string
+          description: Total denda, IDR rupiah utuh.
 
     ReturnRecordDetail:
       allOf:

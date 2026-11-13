@@ -595,3 +595,130 @@ describe('Return & Inspection — isolasi tenant', () => {
     expect(listOtherOrder.body.error.code).toBe('NOT_FOUND');
   });
 });
+// ============================================================
+// Denda keterlambatan — pengaturan owner & perhitungan server
+// ============================================================
+
+describe('Denda keterlambatan — pengaturan owner & perhitungan server', () => {
+  function setLateFee(fx: Fixture, body: Record<string, unknown>): request.Test {
+    return auth(request(server).patch(`${base(fx.tenantId)}/settings`), fx).send(body);
+  }
+
+  /** Catat pengembalian lalu selesaikan dengan waktu terima tertentu. */
+  async function returnAt(fx: Fixture, receivedAt: string): Promise<request.Response> {
+    const created = await createReturn(fx);
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const completed = await auth(
+      request(server).patch(`${base(fx.tenantId)}/returns/${created.body.data.id}/complete`),
+      fx,
+    ).send({ receivedAt });
+    expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+    return completed;
+  }
+
+  it('menolak tarif nol saat aktif, satuan tak dikenal, dan tarif negatif', async () => {
+    const fx = await setupOrder('latecfg');
+
+    const zero = await setLateFee(fx, { lateFeeEnabled: true, lateFeeRateAmount: 0 });
+    expect(zero.status).toBe(400);
+
+    const unit = await setLateFee(fx, { lateFeeUnit: 'WEEK' });
+    expect(unit.status).toBe(400);
+
+    const negative = await setLateFee(fx, { lateFeeRateAmount: -1 });
+    expect(negative.status).toBe(400);
+
+    const ok = await setLateFee(fx, {
+      lateFeeEnabled: true,
+      lateFeeUnit: 'DAY',
+      lateFeeRateAmount: 50_000,
+    });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(204);
+
+    const tenant = await auth(request(server).get(`${base(fx.tenantId)}`), fx);
+    expect(tenant.body.data.lateFeeEnabled).toBe(true);
+    expect(tenant.body.data.lateFeeUnit).toBe('DAY');
+    expect(tenant.body.data.lateFeeRateAmount).toBe('50000');
+  });
+
+  it('menghitung denda harian dari selisih waktu terima dan endAt order', async () => {
+    const fx = await setupOrder('lateday');
+    const saved = await setLateFee(fx, {
+      lateFeeEnabled: true,
+      lateFeeUnit: 'DAY',
+      lateFeeRateAmount: 50_000,
+    });
+    expect(saved.status).toBe(204);
+
+    // endAt item fixture 2026-10-05T00:00Z; diterima 25 jam kemudian → 2 hari.
+    const completed = await returnAt(fx, '2026-10-06T01:00:00.000Z');
+    expect(completed.body.data.lateFee).toMatchObject({
+      enabled: true,
+      unit: 'DAY',
+      rateAmount: '50000',
+      dueAt: '2026-10-05T00:00:00.000Z',
+      returnedAt: '2026-10-06T01:00:00.000Z',
+      units: 2,
+      amount: '100000',
+    });
+
+    // Daftar pengembalian memakai angka yang sama; klien tidak menghitung sendiri.
+    const list = await auth(
+      request(server).get(`${base(fx.tenantId)}/orders/${fx.orderId}/returns`),
+      fx,
+    );
+    expect(list.body.data).toHaveLength(1);
+    expect(list.body.data[0].lateFee.amount).toBe('100000');
+
+    // Denda tidak masuk tagihan order: total order tetap sesuai nilai order
+    // (fixture ini membuat order tanpa total), bukan nilai denda.
+    const order = await auth(
+      request(server).get(`${base(fx.tenantId)}/orders/${fx.orderId}`),
+      fx,
+    );
+    expect(order.body.data.totalAmount).toBe('0');
+  });
+
+  it('mendukung satuan jam dan saklar mati mengembalikan denda nol', async () => {
+    const fx = await setupOrder('latehour');
+    const saved = await setLateFee(fx, {
+      lateFeeEnabled: true,
+      lateFeeUnit: 'HOUR',
+      lateFeeRateAmount: 10_000,
+    });
+    expect(saved.status).toBe(204);
+
+    // Diterima 3,5 jam setelah endAt → dibulatkan menjadi 4 jam.
+    const completed = await returnAt(fx, '2026-10-05T03:30:00.000Z');
+    expect(completed.body.data.lateFee.unit).toBe('HOUR');
+    expect(completed.body.data.lateFee.units).toBe(4);
+    expect(completed.body.data.lateFee.amount).toBe('40000');
+
+    const off = await setLateFee(fx, { lateFeeEnabled: false });
+    expect(off.status).toBe(204);
+
+    const detail = await auth(
+      request(server).get(`${base(fx.tenantId)}/returns/${completed.body.data.id}`),
+      fx,
+    );
+    expect(detail.body.data.lateFee.enabled).toBe(false);
+    expect(detail.body.data.lateFee.units).toBe(0);
+    expect(detail.body.data.lateFee.amount).toBe('0');
+    // Tarif tersimpan tetap ada supaya owner bisa menyalakan lagi tanpa input ulang.
+    expect(detail.body.data.lateFee.rateAmount).toBe('10000');
+  });
+
+  it('pengembalian tepat waktu tidak menghasilkan denda', async () => {
+    const fx = await setupOrder('lateontime');
+    const saved = await setLateFee(fx, {
+      lateFeeEnabled: true,
+      lateFeeUnit: 'DAY',
+      lateFeeRateAmount: 50_000,
+    });
+    expect(saved.status).toBe(204);
+
+    const completed = await returnAt(fx, '2026-10-05T00:00:00.000Z');
+    expect(completed.body.data.lateFee.units).toBe(0);
+    expect(completed.body.data.lateFee.amount).toBe('0');
+  });
+});

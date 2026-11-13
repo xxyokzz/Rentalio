@@ -9,7 +9,9 @@ import {
   MinLength,
   IsArray,
   IsEmail,
+  IsInt,
   IsUrl,
+  Min,
   ValidateIf,
 } from 'class-validator';
 
@@ -43,6 +45,12 @@ export class CreateTenantDto {
   @IsString()
   @MaxLength(64)
   timezone?: string;
+}
+
+/** Satuan denda keterlambatan yang dapat dipilih owner. */
+export enum LateFeeUnitDto {
+  DAY = 'DAY',
+  HOUR = 'HOUR',
 }
 
 export class UpdateTenantSettingsDto {
@@ -90,6 +98,22 @@ export class UpdateTenantSettingsDto {
   @IsUrl({ require_protocol: true })
   @MaxLength(2000)
   qrisImageUrl?: string;
+
+  /** Saklar denda keterlambatan pengembalian. */
+  @IsOptional()
+  @IsBoolean()
+  lateFeeEnabled?: boolean;
+
+  /** Satuan perhitungan denda: per hari atau per jam. */
+  @IsOptional()
+  @IsEnum(LateFeeUnitDto, { message: 'Satuan denda harus DAY atau HOUR.' })
+  lateFeeUnit?: LateFeeUnitDto;
+
+  /** Tarif denda per satuan, IDR rupiah utuh (bukan desimal). */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  lateFeeRateAmount?: number;
 }
 
 /** Enum role keanggotaan. */

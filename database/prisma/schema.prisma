@@ -167,6 +167,12 @@ enum CatalogPolicy {
   SKIP_AVAILABILITY
 }
 
+/** Satuan denda keterlambatan yang dipilih owner. */
+enum LateFeeUnit {
+  DAY
+  HOUR
+}
+
 enum AssetStatus {
   AVAILABLE
   RESERVED
@@ -492,6 +498,12 @@ model Tenant {
   bookingMode            BookingMode   @default(MANUAL)
   catalogPolicy          CatalogPolicy @default(CHECK_AVAILABILITY)
   rentalExtensionEnabled Boolean       @default(false)
+
+  // Denda keterlambatan pengembalian (opt-in per tenant). Nominal dihitung
+  // server dari selisih waktu terima terhadap endAt order, bukan dari klien.
+  lateFeeEnabled    Boolean     @default(false)
+  lateFeeUnit       LateFeeUnit @default(DAY)
+  lateFeeRateAmount BigInt      @default(0)
 
   // Kontak publik tenant untuk katalog, portal pesanan, dan instruksi
   // pembayaran manual (Notion 14 §E). Semua opsional; UI tidak mengarang

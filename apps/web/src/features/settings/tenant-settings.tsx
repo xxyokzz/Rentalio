@@ -39,6 +39,9 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
     whatsappNumber?: string;
     bankTransferInstructions?: string;
     qrisImageUrl?: string;
+    lateFeeEnabled?: boolean;
+    lateFeeUnit?: "DAY" | "HOUR";
+    lateFeeRateAmount?: string;
   }>({});
   const [busy, setBusy] = useState(false);
 
@@ -52,6 +55,10 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
   const bankTransferInstructions =
     draft.bankTransferInstructions ?? tenant?.bankTransferInstructions ?? "";
   const qrisImageUrl = draft.qrisImageUrl ?? tenant?.qrisImageUrl ?? "";
+  const lateFeeEnabled = draft.lateFeeEnabled ?? tenant?.lateFeeEnabled === true;
+  const lateFeeUnit = draft.lateFeeUnit ?? (tenant?.lateFeeUnit === "HOUR" ? "HOUR" : "DAY");
+  const lateFeeRateAmount = draft.lateFeeRateAmount ?? tenant?.lateFeeRateAmount ?? "";
+  const lateFeeRateInvalid = lateFeeEnabled && !(Number.parseInt(lateFeeRateAmount || "0", 10) > 0);
 
   const setBookingMode = (next: "MANUAL" | "AUTOMATIC") =>
     setDraft((current) => ({ ...current, bookingMode: next }));
@@ -99,6 +106,10 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
         whatsappNumber,
         bankTransferInstructions,
         qrisImageUrl,
+        lateFeeEnabled,
+        lateFeeUnit,
+        // Server menolak tarif 0 saat denda aktif; klien tidak mengarang nilai.
+        lateFeeRateAmount: Number.parseInt(lateFeeRateAmount || "0", 10),
       });
       await refresh();
       setDraft({});
@@ -373,6 +384,60 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
                   Perilaku item kosong di katalog mengikuti policy yang sama: A mengizinkan permintaan
                   PENDING_APPROVAL tanpa alokasi; B memblokir booking dan menampilkan “Tanyakan via
                   WhatsApp”.
+                </p>
+              </div>
+            </PanelBody>
+          </Panel>
+
+          <Panel>
+            <PanelHead
+              title="Denda keterlambatan"
+              description="Dihitung server dari waktu terima barang dibanding batas waktu sewa."
+            />
+            <PanelBody>
+              <div className="stack">
+                <CheckboxField
+                  label="Aktifkan denda keterlambatan"
+                  checked={lateFeeEnabled}
+                  onChange={(next) => setDraft((current) => ({ ...current, lateFeeEnabled: next }))}
+                  hint="Bila nonaktif, pengembalian yang telat tetap tercatat tetapi denda selalu Rp0."
+                />
+                <SelectInput
+                  label="Satuan denda"
+                  value={lateFeeUnit}
+                  disabled={!lateFeeEnabled}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      lateFeeUnit: event.target.value as "DAY" | "HOUR",
+                    }))
+                  }
+                  hint="Pilih per hari untuk sewa harian, per jam untuk sewa jam-jaman."
+                >
+                  <option value="DAY">Per hari</option>
+                  <option value="HOUR">Per jam</option>
+                </SelectInput>
+                <TextInput
+                  label={lateFeeUnit === "HOUR" ? "Tarif denda per jam (Rp)" : "Tarif denda per hari (Rp)"}
+                  inputMode="numeric"
+                  value={lateFeeRateAmount}
+                  disabled={!lateFeeEnabled}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      lateFeeRateAmount: event.target.value.replace(/\D/g, ""),
+                    }))
+                  }
+                  hint="IDR rupiah utuh tanpa desimal. Keterlambatan dibulatkan ke atas per satuan."
+                />
+                {lateFeeRateInvalid ? (
+                  <InlineAlert tone="warning">
+                    Tarif harus lebih dari Rp0 agar denda bisa disimpan.
+                  </InlineAlert>
+                ) : null}
+                <p className="text-xs text-muted">
+                  Denda yang dihitung server menjadi usulan pada inspeksi pengembalian; nominal akhirnya
+                  tetap diputuskan petugas berizin dan tidak otomatis menambah tagihan pesanan.
                 </p>
               </div>
             </PanelBody>

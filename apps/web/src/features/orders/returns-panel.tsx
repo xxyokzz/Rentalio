@@ -51,6 +51,18 @@ export function ReturnsPanel({
 
   const completedReturns = returns.filter((item) => item.status === "COMPLETED");
 
+  /**
+   * Denda keterlambatan yang dihitung server untuk pengembalian milik inspeksi
+   * ini. Hanya menjadi nilai awal; keputusan akhir tetap milik petugas.
+   */
+  const suggestedPenaltyFor = (inspection: Inspection | null): string => {
+    const returnId = inspection?.returnRecordId;
+    if (!returnId) return "";
+    const lateFee = returns.find((record) => record.id === returnId)?.lateFee;
+    if (!lateFee?.enabled || !lateFee.units || lateFee.units === 0) return "";
+    return lateFee.amount ?? "";
+  };
+
   return (
     <div className="stack">
       <InlineAlert tone="info">
@@ -77,6 +89,7 @@ export function ReturnsPanel({
                 <th scope="col">Dibuat</th>
                 <th scope="col">Diterima</th>
                 <th scope="col">Item</th>
+                <th scope="col">Denda telat</th>
                 <th scope="col">Status</th>
                 <th scope="col" className="text-right">
                   Aksi
@@ -86,13 +99,31 @@ export function ReturnsPanel({
             <tbody>
               {returns.length === 0 ? (
                 <tr className="table-empty">
-                  <td colSpan={5}>Belum ada pengembalian dicatat.</td>
+                  <td colSpan={6}>Belum ada pengembalian dicatat.</td>
                 </tr>
               ) : (
                 returns.map((record) => (
                   <tr key={record.id}>
                     <td className="text-sm">{formatDateTime(record.createdAt, timezone)}</td>
                     <td className="text-sm">{record.returnedAt ? formatDateTime(record.returnedAt, timezone) : "—"}</td>
+                    <td className="text-sm">
+                      {(() => {
+                        // Nominal dari server; UI tidak menghitung ulang denda.
+                        const lateFee = record.lateFee;
+                        if (!lateFee?.enabled) return <span className="text-muted">Nonaktif</span>;
+                        if (!record.returnedAt) return <span className="text-muted">Menunggu barang</span>;
+                        if (lateFee.units === 0) return <span className="text-muted">Tepat waktu</span>;
+                        return (
+                          <span>
+                            {formatIDR(lateFee.amount)}
+                            <span className="text-xs text-muted">
+                              {" "}
+                              ({lateFee.units} {lateFee.unit === "HOUR" ? "jam" : "hari"})
+                            </span>
+                          </span>
+                        );
+                      })()}
+                    </td>
                     <td className="text-sm">
                       {(record.items ?? []).map((item) => (
                         <div key={item.id}>
@@ -283,6 +314,7 @@ export function ReturnsPanel({
       <SubmitInspectionDialog
         key={submitting?.id ?? "none"}
         inspection={submitting}
+        suggestedPenalty={suggestedPenaltyFor(submitting)}
         tenantId={tenantId}
         onClose={() => setSubmitting(null)}
         onSaved={() => {
@@ -511,19 +543,22 @@ function CreateInspectionDialog({
 
 function SubmitInspectionDialog({
   inspection,
+  suggestedPenalty,
   tenantId,
   onClose,
   onSaved,
   onError,
 }: {
   inspection: Inspection | null;
+  /** Denda keterlambatan dari server untuk pengembalian terkait (bila ada). */
+  suggestedPenalty: string;
   tenantId: string;
   onClose: () => void;
   onSaved: () => void;
   onError: (message: string) => void;
 }) {
   const [summary, setSummary] = useState(inspection?.summary ?? "");
-  const [penalty, setPenalty] = useState("");
+  const [penalty, setPenalty] = useState(suggestedPenalty);
   const [busy, setBusy] = useState(false);
 
   const submit = async (event: React.FormEvent) => {
@@ -567,7 +602,11 @@ function SubmitInspectionDialog({
           inputMode="numeric"
           value={penalty}
           onChange={(event) => setPenalty(event.target.value.replace(/\D/g, ""))}
-          hint="Kondisi aman tetap Rp0. Denda tidak otomatis dipotong dari deposit."
+          hint={
+            suggestedPenalty
+              ? "Terisi dari denda keterlambatan yang dihitung server; sesuaikan bila perlu. Denda tidak otomatis dipotong dari deposit."
+              : "Kondisi aman tetap Rp0. Denda tidak otomatis dipotong dari deposit."
+          }
         />
       </form>
     </Dialog>

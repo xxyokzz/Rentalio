@@ -2375,6 +2375,15 @@ export interface components {
             bankTransferInstructions?: string | null;
             /** Format: uri */
             qrisImageUrl?: string | null;
+            /** @description Saklar denda keterlambatan pengembalian milik tenant. */
+            lateFeeEnabled?: boolean;
+            /**
+             * @description Satuan perhitungan denda yang dipilih owner.
+             * @enum {string}
+             */
+            lateFeeUnit?: "DAY" | "HOUR";
+            /** @description Tarif denda per satuan, IDR rupiah utuh (string agar aman untuk nilai besar). */
+            lateFeeRateAmount?: string;
             /** Format: date-time */
             activatedAt?: string | null;
             /** Format: date-time */
@@ -2467,6 +2476,15 @@ export interface components {
              * @description URL gambar QRIS publik; string kosong menghapus nilai.
              */
             qrisImageUrl?: string;
+            /** @description Saklar denda keterlambatan; wajib disertai tarif lebih dari 0. */
+            lateFeeEnabled?: boolean;
+            /**
+             * @description Satuan perhitungan denda, per hari atau per jam.
+             * @enum {string}
+             */
+            lateFeeUnit?: "DAY" | "HOUR";
+            /** @description Tarif denda per satuan dalam IDR rupiah utuh. */
+            lateFeeRateAmount?: number;
         };
         InviteMemberRequest: {
             /** Format: email */
@@ -2789,10 +2807,29 @@ export interface components {
             receivedByUserId?: string | null;
             notes?: string | null;
             items?: components["schemas"]["ReturnItemResponse"][];
+            lateFee?: components["schemas"]["LateFeeResponse"];
             /** Format: date-time */
             createdAt?: string;
             /** Format: date-time */
             updatedAt?: string;
+        };
+        /** @description Denda keterlambatan yang dihitung server dari `returnedAt` terhadap `endAt` order. Nilainya usulan untuk inspeksi, bukan tambahan tagihan otomatis. */
+        LateFeeResponse: {
+            enabled?: boolean;
+            /** @enum {string} */
+            unit?: "DAY" | "HOUR";
+            /** @description Tarif per satuan, IDR rupiah utuh. */
+            rateAmount?: string;
+            /** Format: date-time */
+            dueAt?: string | null;
+            /** Format: date-time */
+            returnedAt?: string | null;
+            /** @description Selisih milidetik antara waktu terima dan batas waktu (0 bila tidak telat). */
+            overdueMs?: number;
+            /** @description Jumlah satuan keterlambatan (dibulatkan ke atas). */
+            units?: number;
+            /** @description Total denda, IDR rupiah utuh. */
+            amount?: string;
         };
         ReturnRecordDetail: components["schemas"]["ReturnRecordResponse"] & {
             inspections?: {

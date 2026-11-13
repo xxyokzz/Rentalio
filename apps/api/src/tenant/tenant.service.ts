@@ -198,6 +198,9 @@ export class TenantService {
     whatsappNumber: string | null;
     bankTransferInstructions: string | null;
     qrisImageUrl: string | null;
+    lateFeeEnabled: boolean;
+    lateFeeUnit: string;
+    lateFeeRateAmount: string;
     activatedAt: Date | null;
     trialEndsAt: Date | null;
     /** Status langganan efektif — dipakai UI untuk mode terbatas (bukan hitungan klien). */
@@ -244,6 +247,9 @@ export class TenantService {
         whatsappNumber: tenant.whatsappNumber,
         bankTransferInstructions: tenant.bankTransferInstructions,
         qrisImageUrl: tenant.qrisImageUrl,
+        lateFeeEnabled: tenant.lateFeeEnabled,
+        lateFeeUnit: tenant.lateFeeUnit,
+        lateFeeRateAmount: tenant.lateFeeRateAmount.toString(),
         activatedAt: tenant.activatedAt,
         trialEndsAt: tenant.trialEndsAt,
         subscription: {
@@ -279,6 +285,26 @@ export class TenantService {
     await this.requireMembership(tenantId, ctx.actorUserId, ['OWNER']);
 
     await this.prisma.withTenant(tenantId, async (tx) => {
+      // Saklar denda tanpa tarif akan selalu menghasilkan nol; tolak di server
+      // agar owner tidak mengira dendanya aktif padahal tidak pernah dihitung.
+      if (dto.lateFeeEnabled === true || dto.lateFeeRateAmount !== undefined) {
+        const current = await tx.tenant.findUnique({
+          where: { id: tenantId },
+          select: { lateFeeEnabled: true, lateFeeRateAmount: true },
+        });
+        const nextEnabled = dto.lateFeeEnabled ?? current?.lateFeeEnabled ?? false;
+        const nextRate =
+          dto.lateFeeRateAmount !== undefined
+            ? BigInt(dto.lateFeeRateAmount)
+            : (current?.lateFeeRateAmount ?? 0n);
+        if (nextEnabled && nextRate <= 0n) {
+          throw new ApiError(
+            ErrorCode.VALIDATION_ERROR,
+            'Tarif denda harus lebih dari 0 saat denda keterlambatan diaktifkan.',
+          );
+        }
+      }
+
       await tx.tenant.update({
         where: { id: tenantId },
         data: {
@@ -295,6 +321,11 @@ export class TenantService {
           }),
           ...(dto.qrisImageUrl !== undefined && {
             qrisImageUrl: dto.qrisImageUrl.trim() || null,
+          }),
+          ...(dto.lateFeeEnabled !== undefined && { lateFeeEnabled: dto.lateFeeEnabled }),
+          ...(dto.lateFeeUnit !== undefined && { lateFeeUnit: dto.lateFeeUnit }),
+          ...(dto.lateFeeRateAmount !== undefined && {
+            lateFeeRateAmount: BigInt(dto.lateFeeRateAmount),
           }),
         },
       });
