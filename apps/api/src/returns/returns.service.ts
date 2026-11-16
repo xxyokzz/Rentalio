@@ -7,6 +7,7 @@ import { ApiError, ErrorCode } from '../common/errors.js';
 import type {
   CancelReturnDto,
   CompleteReturnDto,
+  CreateInspectionAttachmentDto,
   CreateInspectionDto,
   CreateReturnDto,
   DecideInspectionDto,
@@ -15,18 +16,24 @@ import type {
 import { InspectionDecisionDto } from './returns.dto.js';
 import { computeLateFee, type LateFeePolicy } from './late-fee.js';
 import {
+  amountsForCategory,
   computeDamageFee,
+  computeDamageFeeForLines,
   parseDamagePolicy,
   serializeDamagePolicy,
+  DAMAGE_SEVERITIES,
+  DAMAGE_SEVERITY_LABEL,
+  type DamageAmounts,
   type DamageFeePolicy,
   type DamageSeverity,
+  type DamageSuggestionLine,
 } from './damage-fee.js';
 
 type Ctx = { actorUserId: string; correlationId: string };
 
 type ReturnWithItems = Prisma.ReturnRecordGetPayload<{ include: { items: true } }>;
 type InspectionWithAttachments = Prisma.InspectionGetPayload<{
-  include: { attachments: true };
+  include: { attachments: true; items: true };
 }>;
 
 const READ_ROLES = ['OWNER', 'MANAGER', 'STAFF', 'CASHIER'];
@@ -300,10 +307,14 @@ export class ReturnsService {
       await this.requireOrder(tx, tenantId, orderId);
       const rows = await tx.inspection.findMany({
         where: { tenantId, orderId },
-        include: { attachments: true },
+        include: { attachments: true, items: { orderBy: { createdAt: 'asc' } } },
         orderBy: { createdAt: 'desc' },
       });
-      return rows.map((row) => this.mapInspection(row));
+      return Promise.all(
+        rows.map(async (row) =>
+          this.mapInspection(row, await this.lateFeeForInspection(tx, tenantId, row)),
+        ),
+      );
     });
   }
 
@@ -312,10 +323,10 @@ export class ReturnsService {
     return this.prisma.withTenant(tenantId, async (tx) => {
       const row = await tx.inspection.findUnique({
         where: { tenantId_id: { tenantId, id: inspectionId } },
-        include: { attachments: true },
+        include: { attachments: true, items: { orderBy: { createdAt: 'asc' } } },
       });
       if (!row) throw new ApiError(ErrorCode.NOT_FOUND, 'Inspeksi tidak ditemukan.');
-      return this.mapInspection(row);
+      return this.mapInspection(row, await this.lateFeeForInspection(tx, tenantId, row));
     });
   }
 
@@ -356,29 +367,33 @@ export class ReturnsService {
             'Inspeksi hanya dapat dibuat setelah pengembalian diselesaikan.',
           );
         }
-        const active = await tx.inspection.findFirst({
-          where: {
-            tenantId,
-            returnRecordId: dto.returnRecordId,
-            status: { in: ['DRAFT', 'SUBMITTED'] },
-          },
-        });
-        if (active) {
-          throw new ApiError(
-            ErrorCode.BUSINESS_RULE_VIOLATION,
-            'Return record ini sudah memiliki inspeksi aktif.',
-          );
-        }
         returnRecordId = dto.returnRecordId;
+      }
+
+      // Satu order hanya boleh punya satu inspeksi aktif: dua keputusan denda
+      // untuk order yang sama akan membingungkan dan berisiko menagih ganda.
+      const active = await tx.inspection.findFirst({
+        where: { tenantId, orderId, status: { in: ['DRAFT', 'SUBMITTED'] } },
+      });
+      if (active) {
+        throw new ApiError(
+          ErrorCode.BUSINESS_RULE_VIOLATION,
+          'Order ini sudah memiliki inspeksi aktif. Selesaikan atau tolak inspeksi tersebut lebih dulu.',
+        );
       }
 
       // Snapshot konfigurasi saat inspeksi dibuat: perubahan nominal denda
       // setelah ini tidak boleh menulis ulang usulan inspeksi yang berjalan.
       const snapshot = serializeDamagePolicy(damagePolicy.policy);
-      const suggestion = computeDamageFee(
-        damagePolicy.policy,
-        (dto.severity ?? null) as DamageSeverity | null,
-      );
+      const prepared = dto.items?.length
+        ? await this.prepareInspectionItems(tx, tenantId, orderId, damagePolicy.policy, dto.items)
+        : null;
+      const severity =
+        (dto.severity as DamageSeverity | undefined) ??
+        (prepared ? this.worstSeverity(prepared.severities) : null);
+      const suggestion = prepared
+        ? computeDamageFeeForLines(damagePolicy.policy, prepared.lines)
+        : computeDamageFee(damagePolicy.policy, severity);
 
       const created = await tx.inspection.create({
         data: {
@@ -387,12 +402,17 @@ export class ReturnsService {
           returnRecordId,
           summary: dto.summary?.trim() ?? null,
           inspectedByUserId: ctx.actorUserId,
-          severity: (dto.severity ?? null) as DamageSeverity | null,
+          severity,
           damagePolicySnapshot: snapshot as unknown as Prisma.InputJsonValue,
           suggestedPenaltyAmount: suggestion.amount ? BigInt(suggestion.amount) : null,
         },
-        include: { attachments: true },
+        include: { attachments: true, items: true },
       });
+      if (prepared) {
+        await tx.inspectionItem.createMany({
+          data: prepared.rows.map((row) => ({ tenantId, inspectionId: created.id, ...row })),
+        });
+      }
 
       await this.audit.record(
         {
@@ -407,15 +427,25 @@ export class ReturnsService {
           metadata: {
             orderId,
             returnRecordId,
-            severity: dto.severity ?? null,
+            severity,
             damageFeeEnabled: damagePolicy.policy.enabled,
             suggestedPenaltyAmount: suggestion.amount,
+            suggestedRawAmount: suggestion.rawAmount,
+            capped: suggestion.capped,
+            itemCount: prepared?.rows.length ?? 0,
           },
         },
         tx,
       );
 
-      return this.mapInspection(created);
+      const reloaded = await tx.inspection.findUniqueOrThrow({
+        where: { tenantId_id: { tenantId, id: created.id } },
+        include: { attachments: true, items: { orderBy: { createdAt: 'asc' } } },
+      });
+      return this.mapInspection(
+        reloaded,
+        await this.lateFeeForInspection(tx, tenantId, reloaded),
+      );
     });
   }
 
@@ -442,8 +472,29 @@ export class ReturnsService {
       // Usulan dihitung dari SNAPSHOT inspeksi (bukan konfigurasi tenant saat
       // ini), sehingga inspeksi lama tidak berubah saat owner mengganti nominal.
       const policy = parseDamagePolicy(existing.damagePolicySnapshot);
-      const severity = (dto.severity ?? existing.severity ?? null) as DamageSeverity | null;
-      const suggestion = computeDamageFee(policy, severity);
+      // Rincian per item boleh diganti selama masih DRAFT. Usulan dihitung dari
+      // snapshot, bukan dari tarif tenant yang berlaku sekarang.
+      const prepared = dto.items?.length
+        ? await this.prepareInspectionItems(
+            tx,
+            tenantId,
+            existing.orderId,
+            policy,
+            dto.items,
+          )
+        : null;
+      if (prepared) {
+        await tx.inspectionItem.deleteMany({ where: { tenantId, inspectionId } });
+        await tx.inspectionItem.createMany({
+          data: prepared.rows.map((row) => ({ tenantId, inspectionId, ...row })),
+        });
+      }
+      const severity = (dto.severity ??
+        (prepared ? this.worstSeverity(prepared.severities) : existing.severity) ??
+        null) as DamageSeverity | null;
+      const suggestion = prepared
+        ? computeDamageFeeForLines(policy, prepared.lines)
+        : computeDamageFee(policy, severity);
 
       const updated = await tx.inspection.update({
         where: { id: inspectionId },
@@ -453,9 +504,7 @@ export class ReturnsService {
           inspectedAt: existing.inspectedAt ?? now,
           inspectedByUserId: existing.inspectedByUserId ?? ctx.actorUserId,
           ...(dto.summary !== undefined && { summary: dto.summary?.trim() ?? null }),
-          ...(dto.severity !== undefined && {
-            severity: dto.severity as DamageSeverity,
-          }),
+          ...(severity !== null && { severity }),
           suggestedPenaltyAmount: suggestion.amount ? BigInt(suggestion.amount) : null,
           ...(dto.penaltyAmount !== undefined && {
             penaltyAmount: BigInt(dto.penaltyAmount),
@@ -479,12 +528,22 @@ export class ReturnsService {
             orderId: existing.orderId,
             severity,
             suggestedPenaltyAmount: suggestion.amount,
+            suggestedRawAmount: suggestion.rawAmount,
+            capped: suggestion.capped,
+            itemCount: prepared?.rows.length ?? 0,
           },
         },
         tx,
       );
 
-      return this.mapInspection(updated);
+      const reloaded = await tx.inspection.findUniqueOrThrow({
+        where: { tenantId_id: { tenantId, id: inspectionId } },
+        include: { attachments: true, items: { orderBy: { createdAt: 'asc' } } },
+      });
+      return this.mapInspection(
+        reloaded,
+        await this.lateFeeForInspection(tx, tenantId, reloaded),
+      );
     });
   }
 
@@ -524,7 +583,7 @@ export class ReturnsService {
           penaltyAmount: approve ? BigInt(dto.penaltyAmount ?? 0) : null,
           ...(dto.summary !== undefined && { summary: dto.summary?.trim() ?? null }),
         },
-        include: { attachments: true },
+        include: { attachments: true, items: true },
       });
 
       await this.audit.record(
@@ -542,12 +601,198 @@ export class ReturnsService {
             orderId: existing.orderId,
             decision: dto.decision,
             penaltyAmount: dto.penaltyAmount ?? null,
+            suggestedPenaltyAmount: existing.suggestedPenaltyAmount?.toString() ?? null,
           },
         },
         tx,
       );
 
-      return this.mapInspection(updated);
+      return this.mapInspection(
+        updated,
+        await this.lateFeeForInspection(tx, tenantId, updated),
+      );
+    });
+  }
+
+  /**
+   * Daftarkan lampiran foto/dokumen yang sudah diunggah ke R2.
+   *
+   * Object key wajib berada di namespace tenant (`tenants/{tenantId}/inspections/`)
+   * supaya tenant tidak bisa menautkan objek milik tenant lain. Tipe dan ukuran
+   * dibatasi di server, bukan hanya di UI.
+   */
+  async addInspectionAttachment(
+    tenantId: string,
+    inspectionId: string,
+    dto: CreateInspectionAttachmentDto,
+    ctx: Ctx,
+  ) {
+    await this.tenantService.requireMembership(tenantId, ctx.actorUserId, WRITE_ROLES);
+    const allowedMime = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+    const maxBytes = 10 * 1024 * 1024;
+    const prefix = `tenants/${tenantId}/inspections/`;
+
+    if (!dto.objectKey.startsWith(prefix)) {
+      throw new ApiError(
+        ErrorCode.VALIDATION_ERROR,
+        'objectKey lampiran harus berada di namespace upload tenant ini.',
+      );
+    }
+    if (!allowedMime.includes(dto.mimeType)) {
+      throw new ApiError(
+        ErrorCode.VALIDATION_ERROR,
+        'Tipe lampiran harus JPEG, PNG, WebP, atau PDF.',
+      );
+    }
+    if (dto.fileSizeBytes !== undefined && dto.fileSizeBytes > maxBytes) {
+      throw new ApiError(ErrorCode.VALIDATION_ERROR, 'Ukuran lampiran maksimum 10 MB.');
+    }
+
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const inspection = await tx.inspection.findUnique({
+        where: { tenantId_id: { tenantId, id: inspectionId } },
+      });
+      if (!inspection) throw new ApiError(ErrorCode.NOT_FOUND, 'Inspeksi tidak ditemukan.');
+      if (inspection.status === 'REJECTED') {
+        throw new ApiError(
+          ErrorCode.INVALID_STATE_TRANSITION,
+          'Inspeksi yang ditolak tidak menerima lampiran baru.',
+        );
+      }
+      const existingCount = await tx.inspectionAttachment.count({
+        where: { tenantId, inspectionId },
+      });
+      if (existingCount >= 10) {
+        throw new ApiError(
+          ErrorCode.BUSINESS_RULE_VIOLATION,
+          'Satu inspeksi maksimal memiliki 10 lampiran.',
+        );
+      }
+
+      const attachment = await tx.inspectionAttachment.create({
+        data: {
+          tenantId,
+          inspectionId,
+          objectKey: dto.objectKey,
+          mimeType: dto.mimeType,
+          fileSizeBytes: dto.fileSizeBytes ?? null,
+          altText: dto.altText?.trim() || null,
+          sortOrder: dto.sortOrder ?? existingCount,
+        },
+      });
+
+      await this.audit.record(
+        {
+          tenantId,
+          actorUserId: ctx.actorUserId,
+          action: 'INSPECTION_ATTACHMENT_ADDED',
+          domain: 'returns',
+          entityType: 'inspection_attachment',
+          entityId: attachment.id,
+          correlationId: ctx.correlationId,
+          metadata: {
+            inspectionId,
+            objectKey: attachment.objectKey,
+            mimeType: attachment.mimeType,
+            fileSizeBytes: attachment.fileSizeBytes,
+          },
+        },
+        tx,
+      );
+
+      const reloaded = await tx.inspection.findUniqueOrThrow({
+        where: { tenantId_id: { tenantId, id: inspectionId } },
+        include: { attachments: true, items: { orderBy: { createdAt: 'asc' } } },
+      });
+      return this.mapInspection(
+        reloaded,
+        await this.lateFeeForInspection(tx, tenantId, reloaded),
+      );
+    });
+  }
+
+  /**
+   * Teks WhatsApp hasil inspeksi (item 10).
+   *
+   * Sengaja tidak memakai template pembayaran: `PaymentContext` terikat pada
+   * instruksi/konfirmasi pembayaran. Pesan disusun dari data inspeksi terkini
+   * agar tidak memuat angka basi, dan hanya untuk inspeksi yang sudah diajukan.
+   */
+  async inspectionWhatsAppMessage(
+    tenantId: string,
+    inspectionId: string,
+    actorUserId: string,
+  ) {
+    await this.tenantService.requireMembership(tenantId, actorUserId, READ_ROLES);
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const row = await tx.inspection.findUnique({
+        where: { tenantId_id: { tenantId, id: inspectionId } },
+        include: { attachments: true, items: { orderBy: { createdAt: 'asc' } } },
+      });
+      if (!row) throw new ApiError(ErrorCode.NOT_FOUND, 'Inspeksi tidak ditemukan.');
+      if (row.status === 'DRAFT') {
+        throw new ApiError(
+          ErrorCode.INVALID_STATE_TRANSITION,
+          'Ajukan inspeksi terlebih dahulu sebelum mengirim hasil ke penyewa.',
+        );
+      }
+
+      const [order, tenant] = await Promise.all([
+        tx.rentalOrder.findUnique({
+          where: { tenantId_id: { tenantId, id: row.orderId } },
+          include: { customer: true },
+        }),
+        tx.tenant.findUnique({ where: { id: tenantId } }),
+      ]);
+
+      const view = this.mapInspection(
+        row,
+        await this.lateFeeForInspection(tx, tenantId, row),
+      );
+      const productIds = [...new Set(row.items.map((item) => item.productId))];
+      const products =
+        productIds.length > 0
+          ? await tx.product.findMany({ where: { tenantId, id: { in: productIds } } })
+          : [];
+      const productName = new Map(products.map((product) => [product.id, product.name]));
+      const rupiah = (value: string | null | undefined) =>
+        `Rp${new Intl.NumberFormat('id-ID').format(Number(value ?? 0))}`;
+
+      const total =
+        view.penaltyAmount ?? view.suggestedTotal?.total ?? view.suggestedPenaltyAmount ?? null;
+      const lines = [
+        `Halo ${order?.customer?.name ?? 'kak'}, berikut hasil inspeksi pengembalian ${order?.orderNumber ?? ''} di ${tenant?.name ?? 'toko kami'}.`.trim(),
+      ];
+      if (view.items.length > 0) {
+        lines.push('', 'Rincian kondisi:');
+        for (const item of view.items) {
+          const name = productName.get(item.productId) ?? item.productId;
+          lines.push(`- ${name}: ${item.severityLabel} — ${rupiah(item.suggestedAmount)}`);
+        }
+      } else if (view.damageFee?.label) {
+        lines.push('', `Kondisi: ${view.damageFee.label}`);
+      }
+      if (view.summary) lines.push(`Catatan: ${view.summary}`);
+      lines.push(
+        '',
+        total && Number(total) > 0
+          ? `Total denda kerusakan: ${rupiah(total)}.`
+          : 'Tidak ada denda kerusakan yang dibebankan.',
+        view.status === 'APPROVED'
+          ? 'Denda sudah disetujui dan akan ditagihkan terpisah dari biaya sewa.'
+          : 'Hasil ini masih menunggu keputusan pemilik toko.',
+        '',
+        'Silakan hubungi kami bila ada pertanyaan. Terima kasih.',
+      );
+
+      return {
+        text: lines.join('\n'),
+        phone: order?.customer?.phone ?? null,
+        customerName: order?.customer?.name ?? null,
+        orderNumber: order?.orderNumber ?? null,
+        inspectionStatus: view.status,
+        totalAmount: total,
+      };
     });
   }
 
@@ -730,8 +975,23 @@ export class ReturnsService {
         damageFeeMinorAmount: true,
         damageFeeModerateAmount: true,
         damageFeeSevereAmount: true,
+        damageFeeMaxAmount: true,
       },
     });
+    // Nominal khusus kategori disalin ke snapshot agar inspeksi lama tetap
+    // memakai tarif yang berlaku saat inspeksi dibuat.
+    const categoryRows = await tx.damageFeeCategoryAmount.findMany({
+      where: { tenantId },
+      select: { categoryId: true, minorAmount: true, moderateAmount: true, severeAmount: true },
+    });
+    const categories: Record<string, DamageAmounts> = {};
+    for (const row of categoryRows) {
+      categories[row.categoryId] = {
+        MINOR: row.minorAmount,
+        MODERATE: row.moderateAmount,
+        SEVERE: row.severeAmount,
+      };
+    }
     return {
       inspectionEnabled: tenant?.damageInspectionEnabled ?? false,
       policy: {
@@ -741,8 +1001,130 @@ export class ReturnsService {
           MODERATE: tenant?.damageFeeModerateAmount ?? 0n,
           SEVERE: tenant?.damageFeeSevereAmount ?? 0n,
         },
+        maxAmount: tenant?.damageFeeMaxAmount ?? null,
+        ...(Object.keys(categories).length > 0 ? { categories } : {}),
       },
     };
+  }
+
+  /**
+   * Validasi rincian kerusakan terhadap isi order dan resolusi tarif per
+   * kategori. Semua angka dihitung server; klien hanya mengirim tingkat kondisi.
+   */
+  private async prepareInspectionItems(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    orderId: string,
+    policy: DamageFeePolicy,
+    input: { productId: string; assetId?: string; quantity?: number; severity: string; note?: string }[],
+  ): Promise<{
+    rows: {
+      productId: string;
+      assetId: string | null;
+      quantity: number;
+      severity: DamageSeverity;
+      note: string | null;
+      suggestedAmount: bigint | null;
+    }[];
+    lines: DamageSuggestionLine[];
+    severities: DamageSeverity[];
+  }> {
+    const orderItems = await tx.rentalItem.findMany({
+      where: { tenantId, orderId },
+      select: { productId: true, quantity: true },
+    });
+    const orderedProducts = new Set(orderItems.map((item) => item.productId));
+    const productIds = [...new Set(input.map((item) => item.productId))];
+
+    const products = await tx.product.findMany({
+      where: { tenantId, id: { in: productIds } },
+      select: { id: true, categoryId: true },
+    });
+    const categoryByProduct = new Map(products.map((p) => [p.id, p.categoryId]));
+
+    const assetIds = [
+      ...new Set(input.map((i) => i.assetId).filter((id): id is string => Boolean(id))),
+    ];
+    const assets = assetIds.length
+      ? await tx.asset.findMany({
+          where: { tenantId, id: { in: assetIds } },
+          select: { id: true, productId: true },
+        })
+      : [];
+    const assetProduct = new Map(assets.map((asset) => [asset.id, asset.productId]));
+
+    const rows: {
+      productId: string;
+      assetId: string | null;
+      quantity: number;
+      severity: DamageSeverity;
+      note: string | null;
+      suggestedAmount: bigint | null;
+    }[] = [];
+    const lines: DamageSuggestionLine[] = [];
+    const severities: DamageSeverity[] = [];
+
+    for (const item of input) {
+      if (!orderedProducts.has(item.productId)) {
+        throw new ApiError(
+          ErrorCode.BUSINESS_RULE_VIOLATION,
+          'Produk pada rincian kerusakan bukan bagian dari order ini.',
+        );
+      }
+      if (item.assetId) {
+        const owner = assetProduct.get(item.assetId);
+        if (!owner) throw new ApiError(ErrorCode.NOT_FOUND, 'Asset tidak ditemukan.');
+        if (owner !== item.productId) {
+          throw new ApiError(
+            ErrorCode.BUSINESS_RULE_VIOLATION,
+            'Asset tidak termasuk produk pada rincian kerusakan.',
+          );
+        }
+      }
+      const severity = item.severity as DamageSeverity;
+      if (!(DAMAGE_SEVERITIES as readonly string[]).includes(severity)) {
+        throw new ApiError(ErrorCode.VALIDATION_ERROR, 'Tingkat kerusakan tidak dikenal.');
+      }
+      const quantity = item.quantity ?? 1;
+      const amounts = amountsForCategory(policy, categoryByProduct.get(item.productId));
+      const lineAmount = amounts[severity] * BigInt(quantity);
+      rows.push({
+        productId: item.productId,
+        assetId: item.assetId ?? null,
+        quantity,
+        severity,
+        note: item.note?.trim() || null,
+        suggestedAmount: lineAmount > 0n ? lineAmount : null,
+      });
+      lines.push({ severity, quantity, amounts });
+      severities.push(severity);
+    }
+
+    return { rows, lines, severities };
+  }
+
+  /** Tingkat terberat dipakai sebagai ringkasan inspeksi multi-item. */
+  private worstSeverity(severities: DamageSeverity[]): DamageSeverity | null {
+    if (severities.length === 0) return null;
+    return severities.reduce((worst, current) =>
+      DAMAGE_SEVERITIES.indexOf(current) > DAMAGE_SEVERITIES.indexOf(worst) ? current : worst,
+    );
+  }
+
+  /** Denda keterlambatan untuk pengembalian milik inspeksi (bila ada). */
+  private async lateFeeForInspection(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+    inspection: { orderId: string; returnRecordId: string | null },
+  ) {
+    if (!inspection.returnRecordId) return null;
+    const record = await tx.returnRecord.findUnique({
+      where: { tenantId_id: { tenantId, id: inspection.returnRecordId } },
+      select: { returnedAt: true },
+    });
+    if (!record) return null;
+    const context = await this.lateFeeContext(tx, tenantId, inspection.orderId);
+    return computeLateFee(context.policy, context.dueAt, record.returnedAt);
   }
 
   private mapReturn(row: ReturnWithItems, lateFee: ReturnType<typeof computeLateFee>) {
@@ -766,7 +1148,19 @@ export class ReturnsService {
     };
   }
 
-  private mapInspection(row: InspectionWithAttachments) {
+  private mapInspection(
+    row: InspectionWithAttachments,
+    lateFee: ReturnType<typeof computeLateFee> | null = null,
+  ) {
+    const policy = parseDamagePolicy(row.damagePolicySnapshot);
+    const damageSuggestion =
+      row.suggestedPenaltyAmount ??
+      (() => {
+        const single = computeDamageFee(policy, row.severity).amount;
+        return single ? BigInt(single) : 0n;
+      })();
+    const lateFeeAmount =
+      lateFee?.enabled && lateFee.units > 0 ? BigInt(lateFee.amount) : 0n;
     return {
       id: row.id,
       orderId: row.orderId,
@@ -778,8 +1172,24 @@ export class ReturnsService {
       penaltyAmount: row.penaltyAmount?.toString() ?? null,
       severity: row.severity,
       suggestedPenaltyAmount: row.suggestedPenaltyAmount?.toString() ?? null,
+      items: row.items.map((item) => ({
+        id: item.id,
+        productId: item.productId,
+        assetId: item.assetId,
+        quantity: item.quantity,
+        severity: item.severity,
+        severityLabel: DAMAGE_SEVERITY_LABEL[item.severity],
+        note: item.note,
+        suggestedAmount: item.suggestedAmount?.toString() ?? null,
+      })),
+      // Usulan gabungan dihitung server; klien tidak menjumlahkan sendiri.
+      suggestedTotal: {
+        damageFee: damageSuggestion.toString(),
+        lateFee: lateFeeAmount.toString(),
+        total: (damageSuggestion + lateFeeAmount).toString(),
+      },
       // Usulan dibaca dari snapshot inspeksi, bukan konfigurasi tenant terkini.
-      damageFee: computeDamageFee(parseDamagePolicy(row.damagePolicySnapshot), row.severity),
+      damageFee: computeDamageFee(policy, row.severity),
       currency: row.currency,
       inspectedAt: row.inspectedAt,
       submittedAt: row.submittedAt,

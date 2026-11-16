@@ -332,10 +332,92 @@ ditolak saat saklar mati lalu diterima setelah diaktifkan, usulan dari
 nonaktif, dan `severity` tak dikenal → 400 sementara inspeksi tanpa `severity`
 tetap berjalan tanpa usulan.
 
-**Belum termasuk:** `POST /tenants/{tenantId}/inspections/{inspectionId}/attachments`
-(lampiran foto) masih `x-implementation-status: future`, dan tidak ada test web
-baru untuk panel pengaturan/inspeksi — UI hanya terbukti lewat `typecheck` dan
-e2e desktop yang sudah ada.
+**Belum termasuk (kondisi saat commit `2875108`):** lampiran foto masih
+`future` dan belum ada test web baru. Keduanya sudah ditutup pada pembaruan
+berikutnya.
+
+## Pembaruan 16 November 2026 — kelanjutan denda kerusakan (12 butir)
+
+Dua belas butir follow-up di atas dikerjakan berurutan. Prinsip yang tidak
+berubah: server menghitung semua nominal (IDR integer utuh), denda hanya
+**usulan/tagihan tercatat** — tidak menagih otomatis dan tidak memotong deposit
+tanpa persetujuan kedua. Migrasi struktural:
+`20261116150000_damage_fee_followup` (tabel `order_penalties`,
+`inspection_items`, `damage_fee_revisions`, `damage_fee_category_amounts`,
+kolom `tenants.damageFeeMaxAmount`, `deposit_deduction_requests.inspectionId`
+unik; semuanya dengan GRANT + RLS per tenant).
+
+1. **Tagihan denda order** — `POST /tenants/{tenantId}/orders/{orderId}/penalties`.
+   Nominal diambil dari `inspection.penaltyAmount` (bukan body), hanya untuk
+   inspeksi `APPROVED`, dan idempoten per inspeksi (unik + `findFirst`),
+   sehingga klik ganda tidak menagih dua kali. `OrderResponse` menambah
+   `penalties[]`, `penaltyTotalAmount`, dan `amountDue`; `totalAmount` sewa
+   tidak diubah. Audit `ORDER_PENALTY_CREATED` hanya sekali.
+2. **Keputusan inspeksi → potongan deposit** — `DepositDeductionRequest`
+   menerima `inspectionId` opsional. Server menolak `400` bila nominal tidak
+   sama dengan denda inspeksi dan `422` bila inspeksi itu sudah pernah
+   dipakai. Alur dua langkah lama tetap: `PENDING` → approve aktor lain.
+3. **Lampiran foto inspeksi** — `POST .../inspections/{inspectionId}/attachments`
+   kini `implemented`. `objectKey` wajib berprefix
+   `tenants/{tenantId}/inspections/`, MIME JPEG/PNG/WebP/PDF, maks 10 MB,
+   maksimal 10 lampiran, inspeksi `REJECTED` ditolak.
+4. **Tingkat kondisi per item** — `items[]` pada create/submit berisi
+   `productId`, `assetId`, `quantity`, `severity`, `note`. Validasi memastikan
+   item benar milik order. Total usulan = jumlah usulan baris (dengan
+   kuantitas); tingkat inspeksi mengikuti baris terberat.
+5. **Plafon denda** — `damageFeeMaxAmount` per tenant. Usulan di atas plafon
+   dipotong dan ditandai `damageFee.capped` + `rawAmount` (angka sebelum
+   plafon) agar UI bisa memperingatkan.
+6. **Usulan gabungan dihitung server** — `suggestedTotal { damageFee, lateFee,
+   total }` pada setiap respons inspeksi; UI tidak menjumlahkan sendiri.
+7. **Test** — unit `damage-fee` diperluas (plafon, agregasi baris, override
+   kategori, snapshot) dan file integrasi baru
+   `damage-fee-followup.integration.test.ts` (9 test) menutup tagihan,
+   deposit, lampiran, per-item/plafon, satu inspeksi aktif, riwayat, kategori,
+   laporan, dan pesan WhatsApp. Test web baru mengunci perilaku plafon di
+   pengaturan (nilai terkirim integer; kosong → `null`).
+8. **Riwayat kebijakan** — `damage_fee_revisions` ditulis setiap pengaturan
+   denda berubah; `GET /tenants/{tenantId}/damage-fee-revisions` (terbaru
+   dulu). Inspeksi lama tetap memakai snapshot-nya, bukan revisi terbaru.
+9. **Satu inspeksi aktif per order** — inspeksi `DRAFT`/`SUBMITTED` kedua
+   ditolak `422 BUSINESS_RULE_VIOLATION`, sehingga usulan ganda tidak mungkin.
+10. **Pesan WhatsApp hasil inspeksi** — `GET
+    .../inspections/{inspectionId}/whatsapp-message` menyusun teks siap-salin
+    (rincian item + nominal, catatan, total, status keputusan) dari data
+    terkini. Inspeksi `DRAFT` ditolak `409` karena hasil belum diajukan.
+    Kesengajaan: **tidak** memakai `PaymentContext`, karena enum itu khusus
+    instruksi/konfirmasi pembayaran; pesan ini murni komposisi data.
+11. **Laporan denda kerusakan** — `GET
+    /tenants/{tenantId}/reports/damage-fees` (permission `report.read`,
+    filter `from`/`to`): denda tertagih (`count`, `totalAmount`), jumlah
+    inspeksi per status, agregat per tingkat kerusakan, dan produk teratas.
+12. **Tarif per kategori produk** — `GET`/`PUT
+    /tenants/{tenantId}/damage-fee-categories`. Override kategori menang atas
+    nominal tenant saat inspeksi dibuat; kategori tenant lain ditolak.
+
+**UI.** Panel pengembalian menampilkan usulan gabungan server, catatan
+“dipotong plafon”, rincian kerusakan per item saat membuat inspeksi, tombol
+“Catat denda”, “Potong deposit”, dan “Salin WhatsApp”; pengaturan usaha
+mendapat input plafon.
+
+**Belum termasuk:** layar pengaturan untuk nominal per kategori (API sudah
+ada, UI belum) dan e2e Playwright khusus alur inspeksi — alur baru terbukti
+lewat integrasi API dan test komponen web, bukan e2e baru.
+
+### Bukti eksekusi kelanjutan
+
+| Perintah / bukti | Hasil |
+| --- | --- |
+| `pnpm --filter @rentalio/api exec vitest run test/integration/damage-fee-followup.integration.test.ts` | **9 lulus** (tagihan, deposit, lampiran, per-item+plafon, guardrail, riwayat+kategori, laporan, pesan WhatsApp) |
+| `pnpm --filter @rentalio/api test` | **43 file / 532 test lulus** (termasuk 14 unit `damage-fee`) |
+| `pnpm --filter @rentalio/web test` | **20 file / 139 test lulus** (2 test plafon baru) |
+| `pnpm --filter @rentalio/api typecheck` + `lint`, `@rentalio/web typecheck` + `lint` | lulus |
+| `pnpm openapi:validate` | lulus — OpenAPI 3.1.1, **118 path / 146 operasi**, skema 3.1 valid, 0 endpoint future |
+| migrasi dari database kosong (global setup test) | **35 migrasi** terpasang berurutan, termasuk `20261116150000_damage_fee_followup` |
+
+**Catatan rilis:** dua migrasi denda (`20261116090000_tenant_damage_fee`,
+`20261116150000_damage_fee_followup`) harus diterapkan lewat jalur rilis
+sebelum kode API yang memakai kolom/tabel baru tayang.
 
 ## Yang dinyatakan sudah dikerjakan (dan dicentang di Notion)
 
@@ -383,7 +465,8 @@ e2e desktop yang sudah ada.
 5. **Kontrak & akun** — sisa kelompok ini: `POST /contracts/:id/accept`,
    aksi akun lanjutan (ubah profil/kata sandi), `GET /calendar`, dan
    `POST /orders/:id/penalties`. `GET /me`, `GET/POST /customers`, dan
-   `POST /portal/orders/{token}/extensions` sudah ada (pembaruan 29 Okt 2026).
+   `POST /portal/orders/{token}/extensions` sudah ada (pembaruan 29 Okt 2026);
+   `POST /orders/:id/penalties` sudah ada (pembaruan 16 Nov 2026, kelanjutan).
 6. **Media produk & branding** — metadata gambar, publikasi eksplisit,
    penyambungan ke storefront, dan presigned **download**.
 7. **Katalog editor/template (WEB-07)** — fondasi konfigurasi sudah ada
@@ -391,8 +474,6 @@ e2e desktop yang sudah ada.
    draft/publish/rollback teruji), tetapi galeri template, preview
    desktop/mobile, validasi sebelum publish, dan publikasi eksplisit ke
    storefront belum selesai.
-8. **Lampiran inspeksi** — `POST /inspections/{id}/attachments` (satu-satunya
-   endpoint `future` di kontrak).
 
    > Catatan 28 Okt 2026: **`duplicate` template WhatsApp tidak lagi termasuk
    > daftar ini** — endpoint + test-nya sudah ada (lihat §Pembaruan 28 Oktober
@@ -401,8 +482,9 @@ e2e desktop yang sudah ada.
    > Catatan 16 Nov 2026: **pemeriksaan kerusakan & denda kondisi tidak lagi
    > termasuk daftar ini** — saklar inspeksi/denda, nominal ringan/sedang/parah,
    > snapshot konfigurasi, dan usulan denda otomatis sudah ada beserta test-nya
-   > (lihat §Pembaruan 16 November 2026). Lampiran inspeksi (butir 8) tetap
-   > terbuka.
+   > (lihat §Pembaruan 16 November 2026). **Lampiran inspeksi juga sudah ada**
+   > (`POST /inspections/{id}/attachments` beserta test-nya, pembaruan 16 Nov
+   > 2026 kelanjutan), jadi tidak ada lagi endpoint `future`.
 
 ### Sebagian, belum boleh ditandai selesai
 

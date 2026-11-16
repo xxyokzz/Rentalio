@@ -15,6 +15,7 @@ import { ReturnsService } from './returns.service.js';
 import {
   CancelReturnDto,
   CompleteReturnDto,
+  CreateInspectionAttachmentDto,
   CreateInspectionDto,
   CreateReturnDto,
   DecideInspectionDto,
@@ -178,6 +179,22 @@ export class ReturnsController {
     };
   }
 
+  @Get('inspections/:inspectionId/whatsapp-message')
+  @ApiOperation({ summary: 'Teks WhatsApp hasil inspeksi untuk disalin ke penyewa' })
+  async inspectionWhatsAppMessage(
+    @Param('tenantId') tenantId: string,
+    @Param('inspectionId') inspectionId: string,
+    @Req() req: AuthedRequest,
+  ) {
+    return {
+      data: await this.returnsService.inspectionWhatsAppMessage(
+        tenantId,
+        inspectionId,
+        this.uid(req),
+      ),
+    };
+  }
+
   @Patch('inspections/:inspectionId/submit')
   @HttpCode(200)
   @UseGuards(CsrfGuard)
@@ -211,6 +228,28 @@ export class ReturnsController {
     @Req() req: AuthedRequest,
   ) {
     const data = await this.returnsService.decideInspection(
+      tenantId,
+      inspectionId,
+      body,
+      {
+        actorUserId: this.uid(req),
+        correlationId: req.correlationId,
+      },
+    );
+    return { data };
+  }
+
+  @Post('inspections/:inspectionId/attachments')
+  @HttpCode(201)
+  @UseGuards(CsrfGuard)
+  @ApiOperation({ summary: 'Daftarkan lampiran foto/dokumen inspeksi dari R2' })
+  async addAttachment(
+    @Param('tenantId') tenantId: string,
+    @Param('inspectionId') inspectionId: string,
+    @Body() body: CreateInspectionAttachmentDto,
+    @Req() req: AuthedRequest,
+  ) {
+    const data = await this.returnsService.addInspectionAttachment(
       tenantId,
       inspectionId,
       body,

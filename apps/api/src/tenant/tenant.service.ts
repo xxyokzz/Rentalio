@@ -7,7 +7,13 @@ import { EmailService } from '../email/email.service.js';
 import { hashToken } from '../common/crypto.js';
 import { ApiError, ErrorCode } from '../common/errors.js';
 import type { AppConfig } from '../config/env.validation.js';
-import type { CreateTenantDto, UpdateTenantSettingsDto, InviteMemberDto, UpdateMemberDto } from './tenant.dto.js';
+import type {
+  CreateTenantDto,
+  UpdateTenantSettingsDto,
+  InviteMemberDto,
+  UpdateMemberDto,
+  UpsertDamageFeeCategoryDto,
+} from './tenant.dto.js';
 import { createDefaultWhatsAppTemplates } from '../whatsapp-templates/whatsapp-templates.defaults.js';
 import { SubscriptionPolicyService } from '../subscriptions/subscription-policy.service.js';
 import { isReservedTenantSlug } from './tenant-slugs.js';
@@ -205,7 +211,8 @@ export class TenantService {
     damageFeeEnabled: boolean;
     damageFeeMinorAmount: string;
     damageFeeModerateAmount: string;
-    damageFeeSevereAmount: string;
+            damageFeeSevereAmount: string;
+        damageFeeMaxAmount: string | null;
     activatedAt: Date | null;
     trialEndsAt: Date | null;
     /** Status langganan efektif — dipakai UI untuk mode terbatas (bukan hitungan klien). */
@@ -260,6 +267,7 @@ export class TenantService {
         damageFeeMinorAmount: tenant.damageFeeMinorAmount.toString(),
         damageFeeModerateAmount: tenant.damageFeeModerateAmount.toString(),
         damageFeeSevereAmount: tenant.damageFeeSevereAmount.toString(),
+        damageFeeMaxAmount: tenant.damageFeeMaxAmount?.toString() ?? null,
         activatedAt: tenant.activatedAt,
         trialEndsAt: tenant.trialEndsAt,
         subscription: {
@@ -323,7 +331,8 @@ export class TenantService {
         dto.damageFeeEnabled !== undefined ||
         dto.damageFeeMinorAmount !== undefined ||
         dto.damageFeeModerateAmount !== undefined ||
-        dto.damageFeeSevereAmount !== undefined;
+        dto.damageFeeSevereAmount !== undefined ||
+        dto.damageFeeMaxAmount !== undefined;
       if (touchedDamage) {
         const current = await tx.tenant.findUnique({
           where: { id: tenantId },
@@ -392,8 +401,40 @@ export class TenantService {
           ...(dto.damageFeeSevereAmount !== undefined && {
             damageFeeSevereAmount: BigInt(dto.damageFeeSevereAmount),
           }),
+          ...(dto.damageFeeMaxAmount !== undefined && {
+            damageFeeMaxAmount:
+              dto.damageFeeMaxAmount === null ? null : BigInt(dto.damageFeeMaxAmount),
+          }),
         },
       });
+
+      // Riwayat kebijakan: tarif "saat itu" bisa diaudit tanpa membuka snapshot
+      // JSONB inspeksi. Hanya ditulis saat pengaturan denda benar-benar disentuh.
+      if (touchedDamage) {
+        const latest = await tx.tenant.findUniqueOrThrow({
+          where: { id: tenantId },
+          select: {
+            damageInspectionEnabled: true,
+            damageFeeEnabled: true,
+            damageFeeMinorAmount: true,
+            damageFeeModerateAmount: true,
+            damageFeeSevereAmount: true,
+            damageFeeMaxAmount: true,
+          },
+        });
+        await tx.damageFeeRevision.create({
+          data: {
+            tenantId,
+            actorUserId: ctx.actorUserId,
+            inspectionEnabled: latest.damageInspectionEnabled,
+            feeEnabled: latest.damageFeeEnabled,
+            minorAmount: latest.damageFeeMinorAmount,
+            moderateAmount: latest.damageFeeModerateAmount,
+            severeAmount: latest.damageFeeSevereAmount,
+            maxAmount: latest.damageFeeMaxAmount,
+          },
+        });
+      }
       await this.audit.record(
         {
           tenantId,
@@ -407,6 +448,120 @@ export class TenantService {
         },
         tx,
       );
+    });
+  }
+
+  /** Riwayat perubahan kebijakan denda kerusakan (read-only). */
+  async listDamageFeeRevisions(
+    tenantId: string,
+    actorUserId: string,
+  ): Promise<
+    {
+      id: string;
+      inspectionEnabled: boolean;
+      feeEnabled: boolean;
+      minorAmount: string;
+      moderateAmount: string;
+      severeAmount: string;
+      maxAmount: string | null;
+      actorUserId: string;
+      createdAt: Date;
+    }[]
+  > {
+    await this.requireMembership(tenantId, actorUserId, ['OWNER', 'MANAGER', 'STAFF', 'CASHIER']);
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const rows = await tx.damageFeeRevision.findMany({
+        where: { tenantId },
+        orderBy: { createdAt: 'desc' },
+        take: 50,
+      });
+      return rows.map((row) => ({
+        id: row.id,
+        inspectionEnabled: row.inspectionEnabled,
+        feeEnabled: row.feeEnabled,
+        minorAmount: row.minorAmount.toString(),
+        moderateAmount: row.moderateAmount.toString(),
+        severeAmount: row.severeAmount.toString(),
+        maxAmount: row.maxAmount?.toString() ?? null,
+        actorUserId: row.actorUserId,
+        createdAt: row.createdAt,
+      }));
+    });
+  }
+
+  /** Nominal denda kondisi khusus kategori produk. */
+  async listDamageFeeCategoryAmounts(tenantId: string, actorUserId: string) {
+    await this.requireMembership(tenantId, actorUserId, ['OWNER', 'MANAGER', 'STAFF', 'CASHIER']);
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const rows = await tx.damageFeeCategoryAmount.findMany({
+        where: { tenantId },
+        orderBy: { createdAt: 'asc' },
+      });
+      return rows.map((row) => ({
+        categoryId: row.categoryId,
+        minorAmount: row.minorAmount.toString(),
+        moderateAmount: row.moderateAmount.toString(),
+        severeAmount: row.severeAmount.toString(),
+      }));
+    });
+  }
+
+  /** Buat/ubah nominal denda satu kategori. Hanya OWNER. */
+  async upsertDamageFeeCategoryAmount(
+    tenantId: string,
+    dto: UpsertDamageFeeCategoryDto,
+    ctx: { actorUserId: string; correlationId: string },
+  ) {
+    await this.requireMembership(tenantId, ctx.actorUserId, ['OWNER']);
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const category = await tx.category.findUnique({
+        where: { tenantId_id: { tenantId, id: dto.categoryId } },
+      });
+      if (!category) throw new ApiError(ErrorCode.NOT_FOUND, 'Kategori tidak ditemukan.');
+
+      const row = await tx.damageFeeCategoryAmount.upsert({
+        where: { tenantId_categoryId: { tenantId, categoryId: dto.categoryId } },
+        create: {
+          tenantId,
+          categoryId: dto.categoryId,
+          minorAmount: BigInt(dto.minorAmount ?? 0),
+          moderateAmount: BigInt(dto.moderateAmount ?? 0),
+          severeAmount: BigInt(dto.severeAmount ?? 0),
+        },
+        update: {
+          ...(dto.minorAmount !== undefined && { minorAmount: BigInt(dto.minorAmount) }),
+          ...(dto.moderateAmount !== undefined && {
+            moderateAmount: BigInt(dto.moderateAmount),
+          }),
+          ...(dto.severeAmount !== undefined && { severeAmount: BigInt(dto.severeAmount) }),
+        },
+      });
+
+      await this.audit.record(
+        {
+          tenantId,
+          actorUserId: ctx.actorUserId,
+          action: 'TENANT_DAMAGE_CATEGORY_UPDATED',
+          domain: 'tenant',
+          entityType: 'damage_fee_category_amount',
+          entityId: row.id,
+          correlationId: ctx.correlationId,
+          metadata: {
+            categoryId: dto.categoryId,
+            minorAmount: row.minorAmount.toString(),
+            moderateAmount: row.moderateAmount.toString(),
+            severeAmount: row.severeAmount.toString(),
+          },
+        },
+        tx,
+      );
+
+      return {
+        categoryId: row.categoryId,
+        minorAmount: row.minorAmount.toString(),
+        moderateAmount: row.moderateAmount.toString(),
+        severeAmount: row.severeAmount.toString(),
+      };
     });
   }
 

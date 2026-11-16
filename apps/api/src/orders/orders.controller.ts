@@ -18,6 +18,7 @@ import {
   CreateCollateralDto,
   CreateOrderDto,
   DepositDecisionDto,
+  CreateOrderPenaltyDto,
   DepositDeductionDto,
   DepositReceiptDto,
   DepositRefundDto,
@@ -344,6 +345,23 @@ export class OrdersController {
         ...this.ctx(req),
         idempotencyKey: this.idempotencyKey(key),
       }),
+    };
+  }
+
+  @Post('orders/:orderId/penalties')
+  @HttpCode(201)
+  @UseGuards(CsrfGuard)
+  @ApiOperation({
+    summary: 'Catat denda kerusakan dari inspeksi APPROVED sebagai tagihan order',
+  })
+  async createPenalty(
+    @Param('tenantId') tenantId: string,
+    @Param('orderId') orderId: string,
+    @Body() body: CreateOrderPenaltyDto,
+    @Req() req: AuthedRequest,
+  ) {
+    return {
+      data: await this.ordersService.createPenalty(tenantId, orderId, body, this.ctx(req)),
     };
   }
 

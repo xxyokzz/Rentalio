@@ -332,6 +332,9 @@ components:
         damageFeeSevereAmount:
           type: string
           description: Nominal denda kondisi parah, IDR rupiah utuh (string).
+        damageFeeMaxAmount:
+          type: [ string, 'null' ]
+          description: Plafon usulan denda kondisi per inspeksi; null berarti tanpa plafon.
         activatedAt:
           type: string
           format: date-time
@@ -495,6 +498,10 @@ components:
           type: integer
           minimum: 0
           description: Nominal denda kondisi parah dalam IDR rupiah utuh.
+        damageFeeMaxAmount:
+          type: [ integer, 'null' ]
+          minimum: 1
+          description: Plafon total usulan denda kondisi; null menghapus plafon.
 
     InviteMemberRequest:
       type: object
@@ -1134,7 +1141,16 @@ components:
           description: Label tingkat kondisi dalam bahasa Indonesia.
         amount:
           type: [ string, 'null' ]
-          description: Usulan denda, IDR rupiah utuh; null bila tidak ada usulan.
+          description: Usulan denda setelah plafon; null bila tidak ada usulan.
+        rawAmount:
+          type: [ string, 'null' ]
+          description: Usulan sebelum plafon.
+        capped:
+          type: boolean
+          description: True bila usulan dipotong plafon tenant.
+        maxAmount:
+          type: [ string, 'null' ]
+          description: Plafon yang berlaku pada snapshot inspeksi.
         amounts:
           type: object
           description: Snapshot nominal per tingkat kondisi, IDR rupiah utuh.
@@ -1145,6 +1161,151 @@ components:
               type: string
             SEVERE:
               type: string
+
+    InspectionItemInput:
+      type: object
+      required: [ productId, severity ]
+      properties:
+        productId: { type: string, format: uuid }
+        assetId: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1, default: 1 }
+        severity:
+          type: string
+          enum: [ MINOR, MODERATE, SEVERE ]
+        note: { type: string, maxLength: 500 }
+
+    InspectionItemResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        productId: { type: string, format: uuid }
+        assetId:
+          type: [ string, 'null' ]
+          format: uuid
+        quantity: { type: integer }
+        severity:
+          type: string
+          enum: [ MINOR, MODERATE, SEVERE ]
+        severityLabel:
+          type: string
+          description: Label tampilan tingkat kerusakan.
+        note:
+          type: [ string, 'null' ]
+        suggestedAmount:
+          type: [ string, 'null' ]
+          description: Usulan baris ini, IDR rupiah utuh (dari snapshot).
+
+    InspectionWhatsAppMessageResponse:
+      type: object
+      required: [ text, inspectionStatus ]
+      properties:
+        text:
+          type: string
+          description: Pesan siap kirim (baris baru dengan \n).
+        phone:
+          type: [ string, 'null' ]
+          description: Nomor pelanggan bila tersimpan.
+        customerName: { type: [ string, 'null' ] }
+        orderNumber: { type: [ string, 'null' ] }
+        inspectionStatus:
+          type: string
+          enum: [ SUBMITTED, APPROVED, REJECTED ]
+        totalAmount:
+          type: [ string, 'null' ]
+          description: Denda/ usulan yang disebut di pesan, IDR rupiah utuh.
+
+    OrderPenaltyResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        orderId: { type: string, format: uuid }
+        inspectionId: { type: string, format: uuid }
+        amount: { type: string }
+        currency: { type: string, enum: [ IDR ] }
+        reason: { type: string }
+        createdByUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+
+    CreateOrderPenaltyRequest:
+      type: object
+      required: [ inspectionId, reason ]
+      properties:
+        inspectionId: { type: string, format: uuid }
+        reason: { type: string, minLength: 3, maxLength: 500 }
+
+    DamageFeeRevisionResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        inspectionEnabled: { type: boolean }
+        feeEnabled: { type: boolean }
+        minorAmount: { type: string }
+        moderateAmount: { type: string }
+        severeAmount: { type: string }
+        maxAmount:
+          type: [ string, 'null' ]
+        actorUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+
+    DamageFeeCategoryAmountResponse:
+      type: object
+      properties:
+        categoryId: { type: string, format: uuid }
+        minorAmount: { type: string }
+        moderateAmount: { type: string }
+        severeAmount: { type: string }
+
+    UpsertDamageFeeCategoryRequest:
+      type: object
+      required: [ categoryId ]
+      properties:
+        categoryId: { type: string, format: uuid }
+        minorAmount: { type: integer, minimum: 0 }
+        moderateAmount: { type: integer, minimum: 0 }
+        severeAmount: { type: integer, minimum: 0 }
+
+    DamageFeeReportResponse:
+      type: object
+      properties:
+        range:
+          type: object
+          properties:
+            from: { type: [ string, 'null' ], format: date-time }
+            to: { type: [ string, 'null' ], format: date-time }
+        penalties:
+          type: object
+          properties:
+            count: { type: integer }
+            totalAmount: { type: string }
+        inspections:
+          type: object
+          properties:
+            DRAFT: { type: integer }
+            SUBMITTED: { type: integer }
+            APPROVED: { type: integer }
+            REJECTED: { type: integer }
+        severity:
+          type: object
+          properties:
+            MINOR: { $ref: '#/components/schemas/DamageSeverityStat' }
+            MODERATE: { $ref: '#/components/schemas/DamageSeverityStat' }
+            SEVERE: { $ref: '#/components/schemas/DamageSeverityStat' }
+        topProducts:
+          type: array
+          items:
+            type: object
+            properties:
+              productId: { type: string, format: uuid }
+              lines: { type: integer }
+              quantity: { type: integer }
+              suggestedAmount: { type: string }
+
+    DamageSeverityStat:
+      type: object
+      properties:
+        lines: { type: integer }
+        quantity: { type: integer }
+        suggestedAmount: { type: string }
 
     ReturnRecordDetail:
       allOf:
@@ -1181,6 +1342,13 @@ components:
           description: >-
             Tingkat kerusakan (ringan/sedang/parah). Menentukan usulan denda
             otomatis dari snapshot konfigurasi tenant; bukan keputusan final.
+        items:
+          type: array
+          description: >-
+            Rincian kerusakan per item/unit. Bila diisi, usulan dijumlahkan dari
+            baris-baris ini (menggantikan `severity` level inspeksi).
+          items:
+            $ref: '#/components/schemas/InspectionItemInput'
 
     SubmitInspectionRequest:
       type: object
@@ -1196,6 +1364,11 @@ components:
           type: string
           enum: [ MINOR, MODERATE, SEVERE ]
           description: Tingkat kerusakan; mengubah usulan denda otomatis dari snapshot inspeksi.
+        items:
+          type: array
+          description: Rincian kerusakan pengganti (hanya saat status DRAFT).
+          items:
+            $ref: '#/components/schemas/InspectionItemInput'
 
     DecideInspectionRequest:
       type: object
@@ -1270,6 +1443,20 @@ components:
             dibuat; null bila saklar denda mati atau tingkat kondisi kosong.
         damageFee:
           $ref: '#/components/schemas/DamageFeeResponse'
+        items:
+          type: array
+          description: Rincian kerusakan per item/unit.
+          items:
+            $ref: '#/components/schemas/InspectionItemResponse'
+        suggestedTotal:
+          type: object
+          description: >-
+            Usulan gabungan yang dihitung server (denda kondisi dari snapshot +
+            denda keterlambatan pengembalian). Klien tidak menjumlahkan sendiri.
+          properties:
+            damageFee: { type: string }
+            lateFee: { type: string }
+            total: { type: string }
         currency:
           type: string
           default: IDR
@@ -1452,6 +1639,18 @@ components:
         totalAmount: { type: string }
         paidAmount: { type: string }
         outstandingAmount: { type: string }
+        penaltyTotalAmount:
+          type: string
+          description: >-
+            Total denda kerusakan yang sudah dicatat sebagai tagihan order.
+            `totalAmount` tetap nilai sewa; denda tidak mengubahnya.
+        amountDue:
+          type: string
+          description: totalAmount + penaltyTotalAmount − paidAmount.
+        penalties:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderPenaltyResponse'
         sourceReservationId:
           type: [ string, 'null' ]
           format: uuid
@@ -2107,6 +2306,12 @@ components:
         currency: { type: string, enum: [ IDR ] }
         reason: { type: string, minLength: 3, maxLength: 500 }
         conditionNotes: { type: string, maxLength: 1000 }
+        inspectionId:
+          type: string
+          format: uuid
+          description: >-
+            Inspeksi sumber potongan. Bila diisi, nominal wajib sama dengan
+            denda final inspeksi dan satu inspeksi hanya boleh memotong sekali.
 
     DepositDecisionRequest:
       type: object
@@ -7800,8 +8005,200 @@ paths:
   # Tabel inspection_attachments sudah ada, tetapi presigned upload
   # belum diimplementasikan. Endpoint ini sengaja ditandai future.
   # ------------------------------------------------------------
+  /tenants/{tenantId}/orders/{orderId}/penalties:
+    x-implementation-status: implemented
+    post:
+      tags: [ Order ]
+      operationId: createOrderPenalty
+      x-required-permission: order.return
+      summary: Catat denda kerusakan dari inspeksi APPROVED sebagai tagihan order
+      description: |
+        Nominal diambil dari `penaltyAmount` inspeksi, bukan dari body. Satu
+        inspeksi hanya menghasilkan satu tagihan; permintaan ulang mengembalikan
+        baris yang sama. `totalAmount` sewa tidak berubah.
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+        - $ref: '#/components/parameters/orderId'
+        - $ref: '#/components/parameters/csrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderPenaltyRequest'
+      responses:
+        '201':
+          description: Denda tercatat (atau sudah tercatat sebelumnya)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/OrderPenaltyResponse'
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Inspeksi belum diputuskan (INVALID_STATE_TRANSITION) }
+        '422': { description: Inspeksi tanpa denda yang bisa ditagihkan }
+
+  /tenants/{tenantId}/damage-fee-revisions:
+    x-implementation-status: implemented
+    get:
+      tags: [ tenants ]
+      operationId: listDamageFeeRevisions
+      x-required-permission: membership
+      x-required-roles:
+        - OWNER
+        - MANAGER
+        - STAFF
+        - CASHIER
+      summary: Riwayat perubahan kebijakan denda kerusakan (50 terbaru)
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+      responses:
+        '200':
+          description: Riwayat kebijakan
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DamageFeeRevisionResponse'
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /tenants/{tenantId}/damage-fee-categories:
+    x-implementation-status: implemented
+    get:
+      tags: [ tenants ]
+      operationId: listDamageFeeCategoryAmounts
+      x-required-permission: membership
+      x-required-roles:
+        - OWNER
+        - MANAGER
+        - STAFF
+        - CASHIER
+      summary: Nominal denda kondisi khusus per kategori produk
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+      responses:
+        '200':
+          description: Daftar nominal per kategori
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/DamageFeeCategoryAmountResponse'
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      tags: [ tenants ]
+      operationId: upsertDamageFeeCategoryAmount
+      x-required-permission: membership
+      x-required-roles:
+        - OWNER
+      summary: Buat/ubah nominal denda kondisi satu kategori
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+        - $ref: '#/components/parameters/csrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpsertDamageFeeCategoryRequest'
+      responses:
+        '200':
+          description: Nominal tersimpan
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/DamageFeeCategoryAmountResponse'
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /tenants/{tenantId}/reports/damage-fees:
+    x-implementation-status: implemented
+    get:
+      tags: [ report ]
+      operationId: getDamageFeeReport
+      x-required-permission: report.read
+      summary: Laporan denda kerusakan (tagihan, keputusan, tingkat kerusakan)
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Ringkasan laporan
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/DamageFeeReportResponse'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /tenants/{tenantId}/inspections/{inspectionId}/whatsapp-message:
+    x-implementation-status: implemented
+    get:
+      tags: [ Return & Inspection ]
+      operationId: getInspectionWhatsAppMessage
+      x-required-permission: membership
+      x-required-roles:
+        - OWNER
+        - MANAGER
+        - STAFF
+        - CASHIER
+      summary: Susun teks WhatsApp hasil inspeksi
+      description: |
+        Menyusun pesan siap-salin berisi rincian kerusakan, total usulan/denda,
+        dan status keputusan. Tidak memakai template pembayaran karena konteks
+        template (`PaymentContext`) khusus instruksi pembayaran. Inspeksi DRAFT
+        ditolak 409; nomor telepon hanya diambil dari data pelanggan.
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+        - $ref: '#/components/parameters/inspectionId'
+      responses:
+        '200':
+          description: Pesan berhasil disusun
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/InspectionWhatsAppMessageResponse'
+        '404': { $ref: '#/components/responses/NotFound' }
+
   /tenants/{tenantId}/inspections/{inspectionId}/attachments:
-    x-implementation-status: future
+    x-implementation-status: implemented
     post:
       tags: [ Return & Inspection ]
       operationId: createInspectionAttachment
@@ -7810,10 +8207,12 @@ paths:
         - OWNER
         - MANAGER
         - STAFF
-      summary: "[FUTURE] Daftarkan lampiran inspeksi setelah upload ke R2"
+      summary: Daftarkan lampiran inspeksi setelah upload ke R2
       description: |
-        Belum diimplementasikan. Akan menerima objectKey hasil upload langsung
-        ke Cloudflare R2 (presigned URL) dan menyimpan metadata lampiran.
+        Menerima objectKey hasil upload langsung ke Cloudflare R2 (presigned URL).
+        Key wajib berada di `tenants/{tenantId}/inspections/`; tipe dibatasi
+        JPEG/PNG/WebP/PDF dan ukuran maksimum 10 MB, maksimal 10 lampiran per
+        inspeksi. Inspeksi REJECTED tidak menerima lampiran baru.
       security:
         - cookieAuth: []
       parameters:

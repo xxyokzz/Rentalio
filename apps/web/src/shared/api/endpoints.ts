@@ -95,6 +95,38 @@ export const tenantApi = {
 
   updateMember: (tenantId: string, userId: string, body: Schema<"UpdateMemberRequest">) =>
     apiRequest<void>(`/tenants/${tenantId}/members/${userId}`, { method: "PATCH", body }),
+
+  listDamageFeeRevisions: (tenantId: string) =>
+    apiRequest<Schema<"DamageFeeRevisionResponse">[]>(
+      `/tenants/${tenantId}/damage-fee-revisions`,
+    ),
+
+  listDamageFeeCategories: (tenantId: string) =>
+    apiRequest<Schema<"DamageFeeCategoryAmountResponse">[]>(
+      `/tenants/${tenantId}/damage-fee-categories`,
+    ),
+
+  upsertDamageFeeCategory: (
+    tenantId: string,
+    body: Schema<"UpsertDamageFeeCategoryRequest">,
+  ) =>
+    apiRequest<Schema<"DamageFeeCategoryAmountResponse">>(
+      `/tenants/${tenantId}/damage-fee-categories`,
+      { method: "PUT", body },
+    ),
+};
+
+/** Laporan operasional tenant. */
+export const reportApi = {
+  damageFees: (tenantId: string, params?: { from?: string; to?: string }) => {
+    const search = new URLSearchParams();
+    if (params?.from) search.set("from", params.from);
+    if (params?.to) search.set("to", params.to);
+    const suffix = search.toString() ? `?${search.toString()}` : "";
+    return apiRequest<Schema<"DamageFeeReportResponse">>(
+      `/tenants/${tenantId}/reports/damage-fees${suffix}`,
+    );
+  },
 };
 
 /**
@@ -394,6 +426,17 @@ export const orderApi = {
       { method: "POST", body },
     ),
 
+  /** Catat denda kerusakan dari inspeksi APPROVED sebagai tagihan order. */
+  createPenalty: (
+    tenantId: string,
+    orderId: string,
+    body: Schema<"CreateOrderPenaltyRequest">,
+  ) =>
+    apiRequest<Schema<"OrderPenaltyResponse">>(
+      `/tenants/${tenantId}/orders/${orderId}/penalties`,
+      { method: "POST", body },
+    ),
+
   getDeposit: (tenantId: string, orderId: string) =>
     apiRequest<Schema<"DepositResponse">>(`/tenants/${tenantId}/orders/${orderId}/deposits`),
 
@@ -610,6 +653,11 @@ export const inspectionApi = {
     apiRequest<Schema<"InspectionResponse">>(
       `/tenants/${tenantId}/inspections/${inspectionId}/decision`,
       { method: "PATCH", body },
+    ),
+
+  whatsappMessage: (tenantId: string, inspectionId: string) =>
+    apiRequest<Schema<"InspectionWhatsAppMessageResponse">>(
+      `/tenants/${tenantId}/inspections/${inspectionId}/whatsapp-message`,
     ),
 };
 

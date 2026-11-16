@@ -282,6 +282,7 @@ export function OrderDetail({ orderId }: { orderId: string }) {
                     order={data.order}
                     returns={data.returns}
                     inspections={data.inspections}
+                    productNames={data.productNames}
                     onChanged={state.reload}
                   />
                 ) : null

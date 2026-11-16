@@ -28,6 +28,7 @@ import { CronController } from './internal/cron.controller.js';
 import { StorageModule } from './storage/storage.module.js';
 import { PlatformAdminModule } from './platform-admin/platform-admin.module.js';
 import { BillingModule } from './billing/billing.module.js';
+import { ReportsModule } from './reports/reports.module.js';
 
 @Global()
 @Module({
@@ -53,6 +54,7 @@ import { BillingModule } from './billing/billing.module.js';
     StorageModule,
     PlatformAdminModule,
     BillingModule,
+    ReportsModule,
   ],
   controllers: [HealthController, CronController],
   providers: [StructuredLogger, ApiFailureAlertService, HttpErrorFilter],

@@ -522,6 +522,8 @@ model Tenant {
   damageFeeMinorAmount    BigInt  @default(0)
   damageFeeModerateAmount BigInt  @default(0)
   damageFeeSevereAmount   BigInt  @default(0)
+  /// Plafon usulan denda kondisi (null = tanpa plafon). Mencegah salah input.
+  damageFeeMaxAmount      BigInt?
 
   // Kontak publik tenant untuk katalog, portal pesanan, dan instruksi
   // pembayaran manual (Notion 14 §E). Semua opsional; UI tidak mengarang
@@ -748,7 +750,8 @@ model Category {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  products Product[]
+  products         Product[]
+  damageFeeAmounts DamageFeeCategoryAmount[]
 
   @@unique([tenantId, id])
   @@map("categories")
@@ -972,8 +975,9 @@ model RentalOrder {
   deposits           Deposit[]
   deductionRequests  DepositDeductionRequest[]
   returnRecords      ReturnRecord[]
-  inspections        Inspection[]
-  messageSnapshots   TransactionMessageSnapshot[]
+    inspections           Inspection[]
+  penalties             OrderPenalty[]
+  messageSnapshots      TransactionMessageSnapshot[]
   extensions         OrderExtension[]
   extensionOverrides ExtensionOverride[]
   collaterals        Collateral[]
@@ -1191,11 +1195,94 @@ model Inspection {
   updatedAt         DateTime         @updatedAt
 
   attachments InspectionAttachment[]
+  items       InspectionItem[]
+  penalties   OrderPenalty[]
 
   @@unique([tenantId, id])
   @@index([tenantId, orderId])
   @@index([tenantId, status])
   @@map("inspections")
+}
+
+/// Rincian kerusakan per item/unit. Satu inspeksi boleh punya banyak baris;
+/// usulan denda inspeksi adalah jumlah usulan tiap baris.
+model InspectionItem {
+  id              String         @id @default(uuid()) @db.Uuid
+  tenantId        String         @db.Uuid
+  inspectionId    String         @db.Uuid
+  inspection      Inspection     @relation(fields: [tenantId, inspectionId], references: [tenantId, id], onDelete: Cascade)
+  productId       String         @db.Uuid
+  assetId         String?        @db.Uuid
+  quantity        Int            @default(1)
+  severity        DamageSeverity
+  note            String?
+  /// Usulan untuk baris ini, dihitung dari snapshot inspeksi saat ditulis.
+  suggestedAmount BigInt?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@unique([tenantId, id])
+  @@index([tenantId, inspectionId])
+  @@map("inspection_items")
+}
+
+/// Denda kerusakan yang sudah disetujui dan dicatat sebagai tagihan order.
+/// Immutable: satu inspeksi hanya boleh menghasilkan satu baris denda.
+model OrderPenalty {
+  id             String      @id @default(uuid()) @db.Uuid
+  tenantId       String      @db.Uuid
+  orderId        String      @db.Uuid
+  order          RentalOrder @relation(fields: [tenantId, orderId], references: [tenantId, id])
+  inspectionId   String      @db.Uuid
+  inspection     Inspection  @relation(fields: [tenantId, inspectionId], references: [tenantId, id])
+  amount         BigInt
+  currency       String      @default("IDR")
+  reason         String
+  createdByUserId String     @db.Uuid
+  createdAt      DateTime    @default(now())
+
+  @@unique([tenantId, id])
+  @@unique([tenantId, inspectionId])
+  @@index([tenantId, orderId])
+  @@map("order_penalties")
+}
+
+/// Riwayat perubahan kebijakan denda kerusakan milik tenant. Ditulis setiap
+/// kali pengaturan denda berubah, sehingga tarif "saat itu" bisa diaudit tanpa
+/// membuka JSONB snapshot inspeksi.
+model DamageFeeRevision {
+  id               String   @id @default(uuid()) @db.Uuid
+  tenantId         String   @db.Uuid
+  actorUserId      String   @db.Uuid
+  inspectionEnabled Boolean
+  feeEnabled       Boolean
+  minorAmount      BigInt
+  moderateAmount   BigInt
+  severeAmount     BigInt
+  maxAmount        BigInt?
+  createdAt        DateTime @default(now())
+
+  @@unique([tenantId, id])
+  @@index([tenantId, createdAt])
+  @@map("damage_fee_revisions")
+}
+
+/// Nominal denda kondisi khusus per kategori produk. Bila baris tidak ada,
+/// nominal tenant dipakai. Memungkinkan tarif elektronik berbeda dari alat
+/// camping tanpa mengubah default seluruh toko.
+model DamageFeeCategoryAmount {
+  id              String   @id @default(uuid()) @db.Uuid
+  tenantId        String   @db.Uuid
+  categoryId      String   @db.Uuid
+  category        Category @relation(fields: [tenantId, categoryId], references: [tenantId, id], onDelete: Cascade)
+  minorAmount     BigInt   @default(0)
+  moderateAmount  BigInt   @default(0)
+  severeAmount    BigInt   @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([tenantId, categoryId])
+  @@map("damage_fee_category_amounts")
 }
 
 /// Lampiran foto/dokumen untuk inspeksi.
@@ -1396,6 +1483,8 @@ model DepositDeductionRequest {
   approvedByUserId  String?                @db.Uuid
   decisionReason    String?
   decidedAt         DateTime?
+  /// Bila potongan berasal dari keputusan inspeksi kerusakan.
+  inspectionId      String?                @db.Uuid
   movementId        String?                @db.Uuid
   movement          DepositMovement?       @relation(fields: [tenantId, movementId], references: [tenantId, id])
   idempotencyKey    String?
@@ -1405,6 +1494,7 @@ model DepositDeductionRequest {
   @@unique([tenantId, id])
   @@unique([tenantId, idempotencyKey])
   @@unique([tenantId, movementId])
+  @@unique([tenantId, inspectionId])
   @@index([tenantId, orderId, status])
   @@map("deposit_deduction_requests")
 }

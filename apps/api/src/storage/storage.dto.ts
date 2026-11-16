@@ -4,6 +4,8 @@ export enum StorageUploadCategory {
   BRANDING = 'branding',
   PRODUCTS = 'products',
   RECEIPTS = 'receipts',
+  /** Foto/dokumen inspeksi kerusakan (namespace `tenants/{id}/inspections/`). */
+  INSPECTIONS = 'inspections',
   GENERAL = 'general',
 }
 

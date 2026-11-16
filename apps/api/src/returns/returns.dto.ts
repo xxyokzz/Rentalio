@@ -85,6 +85,31 @@ export class CancelReturnDto {
 // Inspection
 // ============================================================
 
+/** Satu baris kerusakan per item/unit di dalam inspeksi. */
+export class InspectionItemDto {
+  @IsUUID()
+  productId!: string;
+
+  @IsOptional()
+  @IsUUID()
+  assetId?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  quantity?: number;
+
+  @IsEnum(DamageSeverityDto, {
+    message: 'Tingkat kerusakan harus MINOR, MODERATE, atau SEVERE.',
+  })
+  severity!: DamageSeverityDto;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
+}
+
 export class CreateInspectionDto {
   /** Inspeksi dapat dikaitkan ke return record pada order yang sama. */
   @IsOptional()
@@ -95,6 +120,13 @@ export class CreateInspectionDto {
   @IsString()
   @MaxLength(2000)
   summary?: string;
+
+  /** Rincian kerusakan per item; bila diisi, menjadi sumber usulan denda. */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => InspectionItemDto)
+  items?: InspectionItemDto[];
 
   /** Tingkat kerusakan; menentukan usulan denda otomatis dari snapshot tenant. */
   @IsOptional()
@@ -122,6 +154,39 @@ export class SubmitInspectionDto {
     message: 'Tingkat kerusakan harus MINOR, MODERATE, atau SEVERE.',
   })
   severity?: DamageSeverityDto;
+
+  /** Rincian kerusakan pengganti; bila diisi, usulan dihitung dari baris ini. */
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => InspectionItemDto)
+  items?: InspectionItemDto[];
+}
+
+/** Lampiran inspeksi; objectKey harus berada di namespace tenant. */
+export class CreateInspectionAttachmentDto {
+  @IsString()
+  @MaxLength(500)
+  objectKey!: string;
+
+  @IsString()
+  @MaxLength(100)
+  mimeType!: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  fileSizeBytes?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  altText?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  sortOrder?: number;
 }
 
 export enum InspectionDecisionDto {

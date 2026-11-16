@@ -933,3 +933,4 @@ describe('Denda kerusakan — pengaturan owner, snapshot, dan usulan otomatis', 
     expect(plain.body.data.damageFee.label).toBeNull();
   });
 });
+

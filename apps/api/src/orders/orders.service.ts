@@ -12,6 +12,7 @@ import type {
   CompleteOrderDto,
   CreateCollateralDto,
   CreateOrderDto,
+  CreateOrderPenaltyDto,
   DepositDecisionDto,
   DepositDeductionDto,
   DepositReceiptDto,
@@ -33,6 +34,7 @@ type Ctx = { actorUserId: string; correlationId: string; idempotencyKey?: string
 const ORDER_INCLUDE = {
   items: true,
   payments: { orderBy: { recordedAt: 'asc' } },
+  penalties: { orderBy: { createdAt: 'asc' } },
   deposits: {
     include: {
       movements: { orderBy: { createdAt: 'asc' } },
@@ -54,6 +56,7 @@ type PaymentRow = Prisma.PaymentGetPayload<Record<string, never>>;
 type RefundRow = Prisma.RefundGetPayload<Record<string, never>>;
 type DeductionRow = Prisma.DepositDeductionRequestGetPayload<Record<string, never>>;
 type CollateralRow = Prisma.CollateralGetPayload<Record<string, never>>;
+type PenaltyRow = Prisma.OrderPenaltyGetPayload<Record<string, never>>;
 
 /** Status refund yang masih menahan (mengunci) nilai refundable. */
 const REFUND_RESERVING_STATUSES = ['REQUESTED', 'APPROVED', 'PROCESSING', 'SUCCEEDED'] as const;
@@ -983,6 +986,84 @@ export class OrdersService {
     );
   }
 
+  /**
+   * Catat denda kerusakan yang sudah disetujui sebagai tagihan order.
+   *
+   * Nominal diambil dari inspeksi (bukan body) supaya angka yang ditagih selalu
+   * sama dengan keputusan petugas. Unik per inspeksi: permintaan ulang
+   * mengembalikan baris yang sudah ada, bukan membuat tagihan kedua.
+   * `totalAmount` sewa tidak diubah; denda muncul terpisah sebagai
+   * `penaltyTotalAmount` dan `amountDue`.
+   */
+  async createPenalty(
+    tenantId: string,
+    orderId: string,
+    dto: CreateOrderPenaltyDto,
+    ctx: Ctx,
+  ) {
+    await this.tenantService.requireMembership(tenantId, ctx.actorUserId, ['OWNER', 'MANAGER']);
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const order = await this.requireOrder(tx, tenantId, orderId);
+      const inspection = await tx.inspection.findUnique({
+        where: { tenantId_id: { tenantId, id: dto.inspectionId } },
+      });
+      if (!inspection || inspection.orderId !== orderId) {
+        throw new ApiError(ErrorCode.NOT_FOUND, 'Inspeksi tidak ditemukan pada order ini.');
+      }
+      if (inspection.status !== 'APPROVED') {
+        throw new ApiError(
+          ErrorCode.INVALID_STATE_TRANSITION,
+          'Denda hanya dapat ditagihkan dari inspeksi berstatus APPROVED.',
+        );
+      }
+      if (!inspection.penaltyAmount || inspection.penaltyAmount <= 0n) {
+        throw new ApiError(
+          ErrorCode.BUSINESS_RULE_VIOLATION,
+          'Inspeksi tidak memiliki denda yang bisa ditagihkan.',
+        );
+      }
+
+      const existing = await tx.orderPenalty.findUnique({
+        where: { tenantId_inspectionId: { tenantId, inspectionId: dto.inspectionId } },
+      });
+      if (existing) return this.mapPenalty(existing);
+
+      const penalty = await tx.orderPenalty.create({
+        data: {
+          tenantId,
+          orderId,
+          inspectionId: dto.inspectionId,
+          amount: inspection.penaltyAmount,
+          currency: order.currency,
+          reason: dto.reason.trim(),
+          createdByUserId: ctx.actorUserId,
+        },
+      });
+
+      await this.audit.record(
+        {
+          tenantId,
+          actorUserId: ctx.actorUserId,
+          action: 'ORDER_PENALTY_CREATED',
+          domain: 'returns',
+          entityType: 'order_penalty',
+          entityId: penalty.id,
+          toState: 'RECORDED',
+          correlationId: ctx.correlationId,
+          reason: penalty.reason,
+          metadata: {
+            orderId,
+            inspectionId: dto.inspectionId,
+            amount: penalty.amount.toString(),
+          },
+        },
+        tx,
+      );
+
+      return this.mapPenalty(penalty);
+    });
+  }
+
   async requestDeduction(
     tenantId: string,
     orderId: string,
@@ -1015,6 +1096,39 @@ export class OrdersService {
             `Mata uang order adalah ${order.currency}.`,
           );
         }
+
+        // Potongan yang berasal dari inspeksi kerusakan: nominal harus sama
+        // dengan denda final, dan satu inspeksi hanya boleh memotong sekali.
+        if (dto.inspectionId) {
+          const inspection = await tx.inspection.findUnique({
+            where: { tenantId_id: { tenantId, id: dto.inspectionId } },
+          });
+          if (!inspection || inspection.orderId !== orderId) {
+            throw new ApiError(ErrorCode.NOT_FOUND, 'Inspeksi tidak ditemukan pada order ini.');
+          }
+          if (inspection.status !== 'APPROVED' || !inspection.penaltyAmount) {
+            throw new ApiError(
+              ErrorCode.INVALID_STATE_TRANSITION,
+              'Potongan deposit dari inspeksi hanya dapat diajukan setelah denda diputuskan (APPROVED).',
+            );
+          }
+          if (inspection.penaltyAmount !== amount) {
+            throw new ApiError(
+              ErrorCode.VALIDATION_ERROR,
+              `Nominal potongan harus sama dengan denda inspeksi (${inspection.penaltyAmount.toString()} IDR).`,
+            );
+          }
+          const alreadyRequested = await tx.depositDeductionRequest.findFirst({
+            where: { tenantId, inspectionId: dto.inspectionId },
+          });
+          if (alreadyRequested) {
+            throw new ApiError(
+              ErrorCode.BUSINESS_RULE_VIOLATION,
+              'Inspeksi ini sudah memiliki permintaan potongan deposit.',
+            );
+          }
+        }
+
         const deposit = await this.ensureDeposit(tx, tenantId, orderId);
         await this.lockDeposit(tx, tenantId, orderId);
         const balance = await this.depositBalance(tx, tenantId, deposit.id);
@@ -1035,6 +1149,7 @@ export class OrdersService {
             reason,
             conditionNotes,
             requestedByUserId: ctx.actorUserId,
+            inspectionId: dto.inspectionId ?? null,
             idempotencyKey: ctx.idempotencyKey ?? null,
           },
         });
@@ -1054,6 +1169,7 @@ export class OrdersService {
               orderId,
               amount: amount.toString(),
               conditionNotes,
+              inspectionId: dto.inspectionId ?? null,
             },
           },
           tx,
@@ -1778,6 +1894,9 @@ export class OrdersService {
     const paid = row.payments
       .filter((payment) => payment.status === 'RECORDED')
       .reduce((sum, payment) => sum + payment.amount, 0n);
+    // Denda kerusakan adalah tagihan terpisah dari harga sewa: totalAmount
+    // tetap nilai sewa, sementara amountDue menjumlahkan keduanya.
+    const penaltyTotal = row.penalties.reduce((sum, penalty) => sum + penalty.amount, 0n);
     return {
       id: row.id,
       orderNumber: row.orderNumber,
@@ -1786,6 +1905,9 @@ export class OrdersService {
       totalAmount: row.totalAmount.toString(),
       paidAmount: paid.toString(),
       outstandingAmount: (row.totalAmount - paid).toString(),
+      penaltyTotalAmount: penaltyTotal.toString(),
+      amountDue: (row.totalAmount + penaltyTotal - paid).toString(),
+      penalties: row.penalties.map((penalty) => this.mapPenalty(penalty)),
       sourceReservationId: row.sourceReservationId,
       customerId: row.customerId,
       hasOpenConflict: row.hasOpenConflict,
@@ -1892,6 +2014,19 @@ export class OrdersService {
     };
   }
 
+  private mapPenalty(penalty: PenaltyRow) {
+    return {
+      id: penalty.id,
+      orderId: penalty.orderId,
+      inspectionId: penalty.inspectionId,
+      amount: penalty.amount.toString(),
+      currency: penalty.currency,
+      reason: penalty.reason,
+      createdByUserId: penalty.createdByUserId,
+      createdAt: penalty.createdAt,
+    };
+  }
+
   private mapDeductionRequest(request: DeductionRow, depositBalance: bigint) {
     return {
       id: request.id,
@@ -1906,6 +2041,7 @@ export class OrdersService {
       approvedByUserId: request.approvedByUserId,
       decisionReason: request.decisionReason,
       decidedAt: request.decidedAt,
+      inspectionId: request.inspectionId,
       movementId: request.movementId,
       depositBalance: depositBalance.toString(),
       createdAt: request.createdAt,

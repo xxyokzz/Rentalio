@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -17,6 +18,7 @@ import {
   InviteMemberDto,
   UpdateMemberDto,
   UpdateTenantSettingsDto,
+  UpsertDamageFeeCategoryDto,
 } from './tenant.dto.js';
 import { SessionGuard, CsrfGuard } from '../auth/auth.guards.js';
 import { ApiError, ErrorCode } from '../common/errors.js';
@@ -86,6 +88,43 @@ export class TenantController {
       actorUserId,
       correlationId: req.correlationId,
     });
+  }
+
+  @Get(':id/damage-fee-revisions')
+  @ApiOperation({ summary: 'Riwayat perubahan kebijakan denda kerusakan' })
+  async listDamageFeeRevisions(
+    @Param('id') id: string,
+    @Req() req: AuthedRequest,
+  ) {
+    return { data: await this.tenantService.listDamageFeeRevisions(id, this.requireSession(req)) };
+  }
+
+  @Get(':id/damage-fee-categories')
+  @ApiOperation({ summary: 'Nominal denda kondisi khusus per kategori produk' })
+  async listDamageFeeCategoryAmounts(
+    @Param('id') id: string,
+    @Req() req: AuthedRequest,
+  ) {
+    return {
+      data: await this.tenantService.listDamageFeeCategoryAmounts(id, this.requireSession(req)),
+    };
+  }
+
+  @Put(':id/damage-fee-categories')
+  @HttpCode(200)
+  @UseGuards(CsrfGuard)
+  @ApiOperation({ summary: 'Buat/ubah nominal denda kondisi satu kategori (OWNER)' })
+  async upsertDamageFeeCategoryAmount(
+    @Param('id') id: string,
+    @Body() body: UpsertDamageFeeCategoryDto,
+    @Req() req: AuthedRequest,
+  ) {
+    return {
+      data: await this.tenantService.upsertDamageFeeCategoryAmount(id, body, {
+        actorUserId: this.requireSession(req),
+        correlationId: req.correlationId,
+      }),
+    };
   }
 
   @Get(':id/members')

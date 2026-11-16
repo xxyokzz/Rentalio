@@ -47,6 +47,7 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
     damageFeeMinorAmount?: string;
     damageFeeModerateAmount?: string;
     damageFeeSevereAmount?: string;
+    damageFeeMaxAmount?: string;
   }>({});
   const [busy, setBusy] = useState(false);
 
@@ -71,6 +72,7 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
   const damageFeeModerateAmount =
     draft.damageFeeModerateAmount ?? tenant?.damageFeeModerateAmount ?? "";
   const damageFeeSevereAmount = draft.damageFeeSevereAmount ?? tenant?.damageFeeSevereAmount ?? "";
+  const damageFeeMaxAmount = draft.damageFeeMaxAmount ?? tenant?.damageFeeMaxAmount ?? "";
   // Server menolak denda aktif tanpa nominal; UI hanya memberi peringatan awal.
   const damageFeeAmounts = [
     damageFeeMinorAmount,
@@ -135,6 +137,10 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
         damageFeeMinorAmount: Number.parseInt(damageFeeMinorAmount || "0", 10),
         damageFeeModerateAmount: Number.parseInt(damageFeeModerateAmount || "0", 10),
         damageFeeSevereAmount: Number.parseInt(damageFeeSevereAmount || "0", 10),
+        // Kosong berarti tanpa plafon; server menyimpannya sebagai null.
+        damageFeeMaxAmount: damageFeeMaxAmount
+          ? Number.parseInt(damageFeeMaxAmount, 10)
+          : null,
       });
       await refresh();
       setDraft({});
@@ -530,6 +536,19 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
                     }
                   />
                 </div>
+                <TextInput
+                  label="Plafon usulan denda (Rp)"
+                  inputMode="numeric"
+                  value={damageFeeMaxAmount}
+                  disabled={!damageFeeEnabled}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      damageFeeMaxAmount: event.target.value.replace(/\D/g, ""),
+                    }))
+                  }
+                  hint="Opsional. Usulan di atas plafon dipotong otomatis dan ditandai di inspeksi. Kosongkan bila tanpa plafon."
+                />
                 {damageFeeInvalid ? (
                   <InlineAlert tone="warning">
                     Isi minimal satu nominal lebih dari Rp0 dan aktifkan inspeksi sebelum denda kondisi

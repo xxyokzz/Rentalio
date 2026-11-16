@@ -1880,6 +1880,103 @@ export interface paths {
         patch: operations["decideInspection"];
         trace?: never;
     };
+    "/tenants/{tenantId}/orders/{orderId}/penalties": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Catat denda kerusakan dari inspeksi APPROVED sebagai tagihan order
+         * @description Nominal diambil dari `penaltyAmount` inspeksi, bukan dari body. Satu
+         *     inspeksi hanya menghasilkan satu tagihan; permintaan ulang mengembalikan
+         *     baris yang sama. `totalAmount` sewa tidak berubah.
+         */
+        post: operations["createOrderPenalty"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenants/{tenantId}/damage-fee-revisions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Riwayat perubahan kebijakan denda kerusakan (50 terbaru) */
+        get: operations["listDamageFeeRevisions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenants/{tenantId}/damage-fee-categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Nominal denda kondisi khusus per kategori produk */
+        get: operations["listDamageFeeCategoryAmounts"];
+        /** Buat/ubah nominal denda kondisi satu kategori */
+        put: operations["upsertDamageFeeCategoryAmount"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenants/{tenantId}/reports/damage-fees": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Laporan denda kerusakan (tagihan, keputusan, tingkat kerusakan) */
+        get: operations["getDamageFeeReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenants/{tenantId}/inspections/{inspectionId}/whatsapp-message": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Susun teks WhatsApp hasil inspeksi
+         * @description Menyusun pesan siap-salin berisi rincian kerusakan, total usulan/denda,
+         *     dan status keputusan. Tidak memakai template pembayaran karena konteks
+         *     template (`PaymentContext`) khusus instruksi pembayaran. Inspeksi DRAFT
+         *     ditolak 409; nomor telepon hanya diambil dari data pelanggan.
+         */
+        get: operations["getInspectionWhatsAppMessage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tenants/{tenantId}/inspections/{inspectionId}/attachments": {
         parameters: {
             query?: never;
@@ -1890,9 +1987,11 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * [FUTURE] Daftarkan lampiran inspeksi setelah upload ke R2
-         * @description Belum diimplementasikan. Akan menerima objectKey hasil upload langsung
-         *     ke Cloudflare R2 (presigned URL) dan menyimpan metadata lampiran.
+         * Daftarkan lampiran inspeksi setelah upload ke R2
+         * @description Menerima objectKey hasil upload langsung ke Cloudflare R2 (presigned URL).
+         *     Key wajib berada di `tenants/{tenantId}/inspections/`; tipe dibatasi
+         *     JPEG/PNG/WebP/PDF dan ukuran maksimum 10 MB, maksimal 10 lampiran per
+         *     inspeksi. Inspeksi REJECTED tidak menerima lampiran baru.
          */
         post: operations["createInspectionAttachment"];
         delete?: never;
@@ -2394,6 +2493,8 @@ export interface components {
             damageFeeModerateAmount?: string;
             /** @description Nominal denda kondisi parah, IDR rupiah utuh (string). */
             damageFeeSevereAmount?: string;
+            /** @description Plafon usulan denda kondisi per inspeksi; null berarti tanpa plafon. */
+            damageFeeMaxAmount?: string | null;
             /** Format: date-time */
             activatedAt?: string | null;
             /** Format: date-time */
@@ -2505,6 +2606,8 @@ export interface components {
             damageFeeModerateAmount?: number;
             /** @description Nominal denda kondisi parah dalam IDR rupiah utuh. */
             damageFeeSevereAmount?: number;
+            /** @description Plafon total usulan denda kondisi; null menghapus plafon. */
+            damageFeeMaxAmount?: number | null;
         };
         InviteMemberRequest: {
             /** Format: email */
@@ -2858,14 +2961,143 @@ export interface components {
             severity?: "MINOR" | "MODERATE" | "SEVERE" | null;
             /** @description Label tingkat kondisi dalam bahasa Indonesia. */
             label?: string | null;
-            /** @description Usulan denda, IDR rupiah utuh; null bila tidak ada usulan. */
+            /** @description Usulan denda setelah plafon; null bila tidak ada usulan. */
             amount?: string | null;
+            /** @description Usulan sebelum plafon. */
+            rawAmount?: string | null;
+            /** @description True bila usulan dipotong plafon tenant. */
+            capped?: boolean;
+            /** @description Plafon yang berlaku pada snapshot inspeksi. */
+            maxAmount?: string | null;
             /** @description Snapshot nominal per tingkat kondisi, IDR rupiah utuh. */
             amounts?: {
                 MINOR?: string;
                 MODERATE?: string;
                 SEVERE?: string;
             };
+        };
+        InspectionItemInput: {
+            /** Format: uuid */
+            productId: string;
+            /** Format: uuid */
+            assetId?: string;
+            /** @default 1 */
+            quantity: number;
+            /** @enum {string} */
+            severity: "MINOR" | "MODERATE" | "SEVERE";
+            note?: string;
+        };
+        InspectionItemResponse: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            productId?: string;
+            /** Format: uuid */
+            assetId?: string | null;
+            quantity?: number;
+            /** @enum {string} */
+            severity?: "MINOR" | "MODERATE" | "SEVERE";
+            /** @description Label tampilan tingkat kerusakan. */
+            severityLabel?: string;
+            note?: string | null;
+            /** @description Usulan baris ini, IDR rupiah utuh (dari snapshot). */
+            suggestedAmount?: string | null;
+        };
+        InspectionWhatsAppMessageResponse: {
+            /** @description Pesan siap kirim (baris baru dengan \n). */
+            text: string;
+            /** @description Nomor pelanggan bila tersimpan. */
+            phone?: string | null;
+            customerName?: string | null;
+            orderNumber?: string | null;
+            /** @enum {string} */
+            inspectionStatus: "SUBMITTED" | "APPROVED" | "REJECTED";
+            /** @description Denda/ usulan yang disebut di pesan, IDR rupiah utuh. */
+            totalAmount?: string | null;
+        };
+        OrderPenaltyResponse: {
+            /** Format: uuid */
+            id?: string;
+            /** Format: uuid */
+            orderId?: string;
+            /** Format: uuid */
+            inspectionId?: string;
+            amount?: string;
+            /** @enum {string} */
+            currency?: "IDR";
+            reason?: string;
+            /** Format: uuid */
+            createdByUserId?: string;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        CreateOrderPenaltyRequest: {
+            /** Format: uuid */
+            inspectionId: string;
+            reason: string;
+        };
+        DamageFeeRevisionResponse: {
+            /** Format: uuid */
+            id?: string;
+            inspectionEnabled?: boolean;
+            feeEnabled?: boolean;
+            minorAmount?: string;
+            moderateAmount?: string;
+            severeAmount?: string;
+            maxAmount?: string | null;
+            /** Format: uuid */
+            actorUserId?: string;
+            /** Format: date-time */
+            createdAt?: string;
+        };
+        DamageFeeCategoryAmountResponse: {
+            /** Format: uuid */
+            categoryId?: string;
+            minorAmount?: string;
+            moderateAmount?: string;
+            severeAmount?: string;
+        };
+        UpsertDamageFeeCategoryRequest: {
+            /** Format: uuid */
+            categoryId: string;
+            minorAmount?: number;
+            moderateAmount?: number;
+            severeAmount?: number;
+        };
+        DamageFeeReportResponse: {
+            range?: {
+                /** Format: date-time */
+                from?: string | null;
+                /** Format: date-time */
+                to?: string | null;
+            };
+            penalties?: {
+                count?: number;
+                totalAmount?: string;
+            };
+            inspections?: {
+                DRAFT?: number;
+                SUBMITTED?: number;
+                APPROVED?: number;
+                REJECTED?: number;
+            };
+            severity?: {
+                MINOR?: components["schemas"]["DamageSeverityStat"];
+                MODERATE?: components["schemas"]["DamageSeverityStat"];
+                SEVERE?: components["schemas"]["DamageSeverityStat"];
+            };
+            topProducts?: {
+                /** Format: uuid */
+                productId?: string;
+                lines?: number;
+                quantity?: number;
+                suggestedAmount?: string;
+            }[];
+        };
+        DamageSeverityStat: {
+            lines?: number;
+            quantity?: number;
+            suggestedAmount?: string;
         };
         ReturnRecordDetail: components["schemas"]["ReturnRecordResponse"] & {
             inspections?: {
@@ -2886,6 +3118,8 @@ export interface components {
              * @enum {string}
              */
             severity?: "MINOR" | "MODERATE" | "SEVERE";
+            /** @description Rincian kerusakan per item/unit. Bila diisi, usulan dijumlahkan dari baris-baris ini (menggantikan `severity` level inspeksi). */
+            items?: components["schemas"]["InspectionItemInput"][];
         };
         SubmitInspectionRequest: {
             summary?: string;
@@ -2896,6 +3130,8 @@ export interface components {
              * @enum {string}
              */
             severity?: "MINOR" | "MODERATE" | "SEVERE";
+            /** @description Rincian kerusakan pengganti (hanya saat status DRAFT). */
+            items?: components["schemas"]["InspectionItemInput"][];
         };
         DecideInspectionRequest: {
             /** @enum {string} */
@@ -2940,6 +3176,14 @@ export interface components {
             /** @description Usulan denda otomatis dari snapshot konfigurasi tenant saat inspeksi dibuat; null bila saklar denda mati atau tingkat kondisi kosong. */
             suggestedPenaltyAmount?: string | null;
             damageFee?: components["schemas"]["DamageFeeResponse"];
+            /** @description Rincian kerusakan per item/unit. */
+            items?: components["schemas"]["InspectionItemResponse"][];
+            /** @description Usulan gabungan yang dihitung server (denda kondisi dari snapshot + denda keterlambatan pengembalian). Klien tidak menjumlahkan sendiri. */
+            suggestedTotal?: {
+                damageFee?: string;
+                lateFee?: string;
+                total?: string;
+            };
             /** @default IDR */
             currency: string;
             /** Format: date-time */
@@ -3108,6 +3352,11 @@ export interface components {
             totalAmount?: string;
             paidAmount?: string;
             outstandingAmount?: string;
+            /** @description Total denda kerusakan yang sudah dicatat sebagai tagihan order. `totalAmount` tetap nilai sewa; denda tidak mengubahnya. */
+            penaltyTotalAmount?: string;
+            /** @description totalAmount + penaltyTotalAmount − paidAmount. */
+            amountDue?: string;
+            penalties?: components["schemas"]["OrderPenaltyResponse"][];
             /** Format: uuid */
             sourceReservationId?: string | null;
             /** Format: uuid */
@@ -3616,6 +3865,11 @@ export interface components {
             currency: "IDR";
             reason: string;
             conditionNotes?: string;
+            /**
+             * Format: uuid
+             * @description Inspeksi sumber potongan. Bila diisi, nominal wajib sama dengan denda final inspeksi dan satu inspeksi hanya boleh memotong sekali.
+             */
+            inspectionId?: string;
         };
         DepositDecisionRequest: {
             reason?: string;
@@ -8661,6 +8915,190 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorBody"];
                 };
             };
+        };
+    };
+    createOrderPenalty: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["csrfToken"];
+            };
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+                orderId: components["parameters"]["orderId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateOrderPenaltyRequest"];
+            };
+        };
+        responses: {
+            /** @description Denda tercatat (atau sudah tercatat sebelumnya) */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["OrderPenaltyResponse"];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Inspeksi belum diputuskan (INVALID_STATE_TRANSITION) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Inspeksi tanpa denda yang bisa ditagihkan */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    listDamageFeeRevisions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Riwayat kebijakan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["DamageFeeRevisionResponse"][];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    listDamageFeeCategoryAmounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Daftar nominal per kategori */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["DamageFeeCategoryAmountResponse"][];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    upsertDamageFeeCategoryAmount: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["csrfToken"];
+            };
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpsertDamageFeeCategoryRequest"];
+            };
+        };
+        responses: {
+            /** @description Nominal tersimpan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["DamageFeeCategoryAmountResponse"];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getDamageFeeReport: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+            };
+            header?: never;
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ringkasan laporan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["DamageFeeReportResponse"];
+                    };
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getInspectionWhatsAppMessage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+                inspectionId: components["parameters"]["inspectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pesan berhasil disusun */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["InspectionWhatsAppMessageResponse"];
+                    };
+                };
+            };
+            404: components["responses"]["NotFound"];
         };
     };
     createInspectionAttachment: {

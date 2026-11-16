@@ -3,6 +3,7 @@
 import { useState } from "react";
 import {
   inspectionApi,
+  orderApi,
   returnApi,
   type Schema,
 } from "@/shared/api/endpoints";
@@ -21,18 +22,31 @@ import { EmptyState, InlineAlert } from "@/shared/ui/states";
 type Order = Schema<"OrderResponse">;
 type ReturnRecord = Schema<"ReturnRecordResponse">;
 type Inspection = Schema<"InspectionResponse">;
+type OrderItem = NonNullable<Order["items"]>[number];
+
+/**
+ * Label baris order untuk dipilih petugas: nama produk, bukan UUID.
+ * UUID produk hanya dipakai sebagai fallback bila katalog gagal dimuat.
+ */
+function itemLabel(item: OrderItem, productNames?: Map<string, string>): string {
+  const name = productNames?.get(item.productId ?? "") ?? "Item";
+  // Unit fisik dibedakan lewat potongan kode pendek, bukan UUID penuh.
+  return item.assetId ? `${name} · unit ${item.assetId.slice(-6)}` : name;
+}
 
 export function ReturnsPanel({
   tenantId,
   order,
   returns,
   inspections,
+  productNames,
   onChanged,
 }: {
   tenantId: string;
   order: Order;
   returns: ReturnRecord[];
   inspections: Inspection[];
+  productNames?: Map<string, string>;
   onChanged: () => void;
 }) {
   const { role, tenant } = useSession();
@@ -40,6 +54,7 @@ export function ReturnsPanel({
   const timezone = tenant?.timezone ?? "Asia/Jakarta";
   const canReturn = can(role as Role | undefined, "order.return");
   const canInspect = can(role as Role | undefined, "order.inspect");
+  const canDeduct = can(role as Role | undefined, "deposit.deduct");
 
   const [createOpen, setCreateOpen] = useState(false);
   const [inspectionOpen, setInspectionOpen] = useState(false);
@@ -47,6 +62,8 @@ export function ReturnsPanel({
   const [cancelling, setCancelling] = useState<ReturnRecord | null>(null);
   const [submitting, setSubmitting] = useState<Inspection | null>(null);
   const [deciding, setDeciding] = useState<Inspection | null>(null);
+  const [penalizing, setPenalizing] = useState<Inspection | null>(null);
+  const [deducting, setDeducting] = useState<Inspection | null>(null);
   const [busy, setBusy] = useState(false);
 
   const completedReturns = returns.filter((item) => item.status === "COMPLETED");
@@ -56,18 +73,28 @@ export function ReturnsPanel({
    * inspeksi) ditambah denda keterlambatan pengembalian terkait. Hanya nilai
    * awal; keputusan akhir tetap milik petugas.
    */
+  const copyWhatsApp = async (inspection: Inspection) => {
+    const id = inspection.id;
+    if (!id) return;
+    setBusy(true);
+    try {
+      const message = await inspectionApi.whatsappMessage(tenantId, id);
+      await navigator.clipboard.writeText(message.text);
+      notify("Pesan WhatsApp hasil inspeksi disalin.", "success");
+    } catch (caught) {
+      notify(describeApiError(caught), "error");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const suggestedPenaltyFor = (inspection: Inspection | null): string => {
+    // Angka gabungan dihitung server (`suggestedTotal`); UI tidak menjumlahkan
+    // denda sendiri. Fallback hanya untuk data lama tanpa field tersebut.
+    const total = inspection?.suggestedTotal?.total;
+    if (total && Number.parseInt(total, 10) > 0) return total;
     const damage = Number.parseInt(inspection?.suggestedPenaltyAmount ?? "0", 10);
-    const returnId = inspection?.returnRecordId;
-    const lateFee = returnId
-      ? returns.find((record) => record.id === returnId)?.lateFee
-      : undefined;
-    const late =
-      lateFee?.enabled && (lateFee.units ?? 0) > 0
-        ? Number.parseInt(lateFee.amount ?? "0", 10)
-        : 0;
-    const total = (Number.isFinite(damage) ? damage : 0) + (Number.isFinite(late) ? late : 0);
-    return total > 0 ? String(total) : "";
+    return Number.isFinite(damage) && damage > 0 ? String(damage) : "";
   };
 
   return (
@@ -214,10 +241,14 @@ export function ReturnsPanel({
                       <StatusBadge status={inspectionStatus(inspection.status)} />
                     </td>
                     <td className="text-sm">
-                      {inspection.damageFee?.label ?? "—"}
-                      {inspection.suggestedPenaltyAmount ? (
+                      {inspection.items?.length
+                        ? `${inspection.items.length} item`
+                        : (inspection.damageFee?.label ?? "—")}
+                      {inspection.suggestedTotal &&
+                      Number.parseInt(inspection.suggestedTotal.total ?? "0", 10) > 0 ? (
                         <div className="text-xs text-muted">
-                          usulan {formatIDR(inspection.suggestedPenaltyAmount)}
+                          usulan {formatIDR(inspection.suggestedTotal.total)}
+                          {inspection.damageFee?.capped ? " (dipotong plafon)" : ""}
                         </div>
                       ) : null}
                     </td>
@@ -235,6 +266,28 @@ export function ReturnsPanel({
                         {canInspect && inspection.status === "SUBMITTED" ? (
                           <Button size="sm" variant="primary" onClick={() => setDeciding(inspection)}>
                             Putuskan
+                          </Button>
+                        ) : null}
+                        {inspection.status !== "DRAFT" ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={busy}
+                            onClick={() => void copyWhatsApp(inspection)}
+                          >
+                            Salin WhatsApp
+                          </Button>
+                        ) : null}
+                        {inspection.status === "APPROVED" && inspection.penaltyAmount ? (
+                          <Button size="sm" variant="secondary" onClick={() => setPenalizing(inspection)}>
+                            Catat denda
+                          </Button>
+                        ) : null}
+                        {canDeduct &&
+                        inspection.status === "APPROVED" &&
+                        inspection.penaltyAmount ? (
+                          <Button size="sm" variant="ghost" onClick={() => setDeducting(inspection)}>
+                            Potong deposit
                           </Button>
                         ) : null}
                       </div>
@@ -266,6 +319,8 @@ export function ReturnsPanel({
         tenantId={tenantId}
         orderId={order.id ?? ""}
         returns={completedReturns}
+        orderItems={order.items ?? []}
+        productNames={productNames}
         onSaved={() => {
           notify("Draf inspeksi dibuat.", "success");
           setInspectionOpen(false);
@@ -340,6 +395,70 @@ export function ReturnsPanel({
         }}
         onError={(message) => notify(message, "error")}
       />
+
+      <ConfirmDialog
+        open={Boolean(penalizing)}
+        onClose={() => setPenalizing(null)}
+        onConfirm={async (reason) => {
+          if (!penalizing?.id || !reason) return;
+          setBusy(true);
+          try {
+            await orderApi.createPenalty(tenantId, order.id ?? "", {
+              inspectionId: penalizing.id,
+              reason,
+            });
+            notify("Denda dicatat sebagai tagihan order.", "success");
+            setPenalizing(null);
+            onChanged();
+          } catch (caught) {
+            notify(describeApiError(caught), "error");
+          } finally {
+            setBusy(false);
+          }
+        }}
+        title="Catat denda kerusakan?"
+        consequence="Denda yang sudah disetujui dicatat sebagai tagihan order (terpisah dari total sewa). Satu inspeksi hanya dapat ditagihkan sekali."
+        confirmLabel="Catat denda"
+        requireReason
+        busy={busy}
+      >
+        <p className="text-sm text-muted">
+          Nominal diambil dari keputusan inspeksi: {formatIDR(penalizing?.penaltyAmount)}.
+        </p>
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={Boolean(deducting)}
+        onClose={() => setDeducting(null)}
+        onConfirm={async (reason) => {
+          if (!deducting?.id || !reason || !deducting.penaltyAmount) return;
+          setBusy(true);
+          try {
+            await orderApi.requestDepositDeduction(tenantId, order.id ?? "", {
+              amount: deducting.penaltyAmount,
+              currency: "IDR",
+              reason,
+              inspectionId: deducting.id,
+            });
+            notify("Potongan deposit diajukan; menunggu persetujuan terpisah.", "success");
+            setDeducting(null);
+            onChanged();
+          } catch (caught) {
+            notify(describeApiError(caught), "error");
+          } finally {
+            setBusy(false);
+          }
+        }}
+        title="Ajukan potongan deposit?"
+        consequence="Potongan tidak langsung memotong saldo: permintaan berstatus PENDING dan harus disetujui aktor lain dengan permission deposit.deduct.approve."
+        confirmLabel="Ajukan potongan"
+        requireReason
+        busy={busy}
+      >
+        <p className="text-sm text-muted">
+          Nominal: {formatIDR(deducting?.penaltyAmount)} — harus sama dengan denda inspeksi.
+        </p>
+      </ConfirmDialog>
 
       <DecideInspectionDialog
         key={deciding?.id ?? "none"}
@@ -483,6 +602,8 @@ function CreateInspectionDialog({
   tenantId,
   orderId,
   returns,
+  orderItems,
+  productNames,
   onSaved,
   onError,
 }: {
@@ -491,22 +612,37 @@ function CreateInspectionDialog({
   tenantId: string;
   orderId: string;
   returns: ReturnRecord[];
+  orderItems: NonNullable<Order["items"]>;
+  productNames?: Map<string, string>;
   onSaved: () => void;
   onError: (message: string) => void;
 }) {
   const [returnRecordId, setReturnRecordId] = useState("");
   const [summary, setSummary] = useState("");
   const [severity, setSeverity] = useState<"" | "MINOR" | "MODERATE" | "SEVERE">("");
+  const [itemSeverities, setItemSeverities] = useState<
+    Record<string, "" | "MINOR" | "MODERATE" | "SEVERE">
+  >({});
   const [busy, setBusy] = useState(false);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     setBusy(true);
     try {
+      const damagedItems = orderItems
+        .filter((item) => item.id && itemSeverities[item.id])
+        .map((item) => ({
+          productId: item.productId ?? "",
+          assetId: item.assetId ?? undefined,
+          quantity: item.quantity ?? 1,
+          severity: itemSeverities[item.id ?? ""] as "MINOR" | "MODERATE" | "SEVERE",
+        }))
+        .filter((item) => item.productId);
       await inspectionApi.create(tenantId, orderId, {
         returnRecordId: returnRecordId || null,
         summary: summary.trim() || undefined,
-        severity: severity || undefined,
+        severity: damagedItems.length === 0 && severity ? severity : undefined,
+        items: damagedItems.length > 0 ? damagedItems : undefined,
       });
       onSaved();
     } catch (caught) {
@@ -547,19 +683,49 @@ function CreateInspectionDialog({
             </option>
           ))}
         </SelectInput>
-        <SelectInput
-          label="Tingkat kerusakan (opsional)"
-          value={severity}
-          onChange={(event) =>
-            setSeverity(event.target.value as "" | "MINOR" | "MODERATE" | "SEVERE")
-          }
-          hint="Usulan denda dihitung server dari tingkat ini dan snapshot pengaturan toko."
-        >
-          <option value="">Tidak ada kerusakan</option>
-          <option value="MINOR">Ringan</option>
-          <option value="MODERATE">Sedang</option>
-          <option value="SEVERE">Parah</option>
-        </SelectInput>
+        {orderItems.length > 0 ? (
+          <div className="stack-sm">
+            <p className="text-sm">
+              Rincian kerusakan per item. Biarkan kosong bila satu item pun tidak rusak.
+            </p>
+            {orderItems.map((item) => (
+              <SelectInput
+                key={item.id ?? item.productId}
+                label={itemLabel(item, productNames)}
+                value={itemSeverities[item.id ?? ""] ?? ""}
+                onChange={(event) =>
+                  setItemSeverities((current) => ({
+                    ...current,
+                    [item.id ?? ""]: event.target.value as
+                      | ""
+                      | "MINOR"
+                      | "MODERATE"
+                      | "SEVERE",
+                  }))
+                }
+              >
+                <option value="">Tidak rusak</option>
+                <option value="MINOR">Ringan</option>
+                <option value="MODERATE">Sedang</option>
+                <option value="SEVERE">Parah</option>
+              </SelectInput>
+            ))}
+          </div>
+        ) : (
+          <SelectInput
+            label="Tingkat kerusakan (opsional)"
+            value={severity}
+            onChange={(event) =>
+              setSeverity(event.target.value as "" | "MINOR" | "MODERATE" | "SEVERE")
+            }
+            hint="Usulan denda dihitung server dari tingkat ini dan snapshot pengaturan toko."
+          >
+            <option value="">Tidak ada kerusakan</option>
+            <option value="MINOR">Ringan</option>
+            <option value="MODERATE">Sedang</option>
+            <option value="SEVERE">Parah</option>
+          </SelectInput>
+        )}
         <TextArea
           label="Ringkasan temuan"
           rows={3}

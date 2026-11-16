@@ -183,6 +183,14 @@ export class DepositDeductionDto {
   @Matches(AMOUNT_PATTERN, { message: 'amount harus integer rupiah utuh > 0 sebagai string' })
   amount!: string;
 
+  /**
+   * Inspeksi kerusakan sumber potongan. Bila diisi, nominal wajib sama dengan
+   * denda final inspeksi dan satu inspeksi hanya boleh memotong sekali.
+   */
+  @IsOptional()
+  @IsUUID()
+  inspectionId?: string;
+
   @IsIn(CURRENCY)
   currency!: 'IDR';
 
@@ -195,6 +203,20 @@ export class DepositDeductionDto {
   @IsString()
   @MaxLength(1000)
   conditionNotes?: string;
+}
+
+/**
+ * Denda kerusakan yang dicatat sebagai tagihan order. Nominal TIDAK diambil
+ * dari body: server memakai denda final inspeksi yang sudah disetujui.
+ */
+export class CreateOrderPenaltyDto {
+  @IsUUID()
+  inspectionId!: string;
+
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason!: string;
 }
 
 export class DepositDecisionDto {

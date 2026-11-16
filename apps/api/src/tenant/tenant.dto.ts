@@ -10,6 +10,7 @@ import {
   IsArray,
   IsEmail,
   IsInt,
+  IsUUID,
   IsUrl,
   Min,
   ValidateIf,
@@ -142,6 +143,33 @@ export class UpdateTenantSettingsDto {
   @IsInt()
   @Min(0)
   damageFeeSevereAmount?: number;
+
+  /** Plafon usulan denda kondisi per inspeksi; `null` menghapus plafon. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  damageFeeMaxAmount?: number | null;
+}
+
+/** Nominal denda kondisi khusus satu kategori produk. */
+export class UpsertDamageFeeCategoryDto {
+  @IsUUID()
+  categoryId!: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  minorAmount?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  moderateAmount?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  severeAmount?: number;
 }
 
 /** Enum role keanggotaan. */

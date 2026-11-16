@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Schema, SubscriptionInvoice } from "@/shared/api/endpoints";
 import { TenantSettings } from "./tenant-settings";
@@ -77,6 +77,57 @@ function pendingInvoice(overrides: Partial<SubscriptionInvoice> = {}): Subscript
     ...overrides,
   };
 }
+
+describe("TenantSettings — plafon denda kerusakan", () => {
+  it("memuat plafon tersimpan dan mengirim nilai baru sebagai integer rupiah", async () => {
+    tenant = {
+      ...makeTenant({ paymentEnabled: false, priceAmount: null, periodDays: 30 }),
+      damageInspectionEnabled: true,
+      damageFeeEnabled: true,
+      damageFeeSevereAmount: "100000",
+      damageFeeMaxAmount: "500000",
+    };
+    mocks.updateSettings.mockResolvedValue({});
+    render(<TenantSettings supportWhatsApp="" />);
+
+    const input = screen.getByLabelText("Plafon usulan denda (Rp)");
+    expect(input).toHaveValue("500000");
+
+    fireEvent.change(input, { target: { value: "750000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Simpan pengaturan" }));
+
+    await waitFor(() =>
+      expect(mocks.updateSettings).toHaveBeenCalledWith(
+        "tenant-1",
+        expect.objectContaining({ damageFeeMaxAmount: 750000 }),
+      ),
+    );
+  });
+
+  it("mengirim null saat plafon dikosongkan agar server menghapus batas", async () => {
+    tenant = {
+      ...makeTenant({ paymentEnabled: false, priceAmount: null, periodDays: 30 }),
+      damageInspectionEnabled: true,
+      damageFeeEnabled: true,
+      damageFeeSevereAmount: "100000",
+      damageFeeMaxAmount: "500000",
+    };
+    mocks.updateSettings.mockResolvedValue({});
+    render(<TenantSettings supportWhatsApp="" />);
+
+    fireEvent.change(screen.getByLabelText("Plafon usulan denda (Rp)"), {
+      target: { value: "" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Simpan pengaturan" }));
+
+    await waitFor(() =>
+      expect(mocks.updateSettings).toHaveBeenCalledWith(
+        "tenant-1",
+        expect.objectContaining({ damageFeeMaxAmount: null }),
+      ),
+    );
+  });
+});
 
 describe("TenantSettings — pembayaran langganan", () => {
   it("menampilkan harga dan tombol QR saat pembayaran diaktifkan server", async () => {
