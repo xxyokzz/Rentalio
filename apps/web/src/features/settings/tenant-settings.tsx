@@ -3,7 +3,13 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useEffect, useState } from "react";
-import { billingApi, tenantApi, type SubscriptionInvoice } from "@/shared/api/endpoints";
+import {
+  billingApi,
+  catalogApi,
+  tenantApi,
+  type Schema,
+  type SubscriptionInvoice,
+} from "@/shared/api/endpoints";
 import { describeApiError } from "@/shared/api/errors";
 import { useSession } from "@/shared/auth/session";
 import { tenantCatalogUrl } from "@/shared/config/hosts";
@@ -16,7 +22,7 @@ import { useToast } from "@/shared/ui/overlays";
 import { DefinitionList, Panel, PageHeader, PanelBody, PanelHead, StatusBadge } from "@/shared/ui/surfaces";
 import { subscriptionSummary } from "@/features/subscription/subscription-summary";
 import { subscriptionRequest } from "@/features/subscription/subscription-request";
-import { InlineAlert, LoadingBlock } from "@/shared/ui/states";
+import { EmptyState, InlineAlert, LoadingBlock } from "@/shared/ui/states";
 
 export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string }) {
   const { tenant, tenantLoading, tenantError, refresh, role } = useSession();
@@ -50,6 +56,20 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
     damageFeeMaxAmount?: string;
   }>({});
   const [busy, setBusy] = useState(false);
+  // Nominal denda per kategori dimuat dan disimpan terpisah dari form tenant:
+  // tiap kategori punya endpoint upsert sendiri agar satu baris gagal tidak
+  // membatalkan perubahan baris lain.
+  const [categories, setCategories] = useState<Schema<"CategoryResponse">[]>([]);
+  // Satu peta menampung nilai tersimpan sekaligus editan baris; simpan per
+  // kategori menimpa baris itu dengan respons server.
+  const [categoryAmounts, setCategoryAmounts] = useState<
+    Record<string, { minor: string; moderate: string; severe: string }>
+  >({});
+  // Mulai dari keadaan memuat: efek hanya boleh mengubah state di callback
+  // async, bukan langsung di body-nya.
+  const [categoriesBusy, setCategoriesBusy] = useState(true);
+  const [categoryError, setCategoryError] = useState<string | null>(null);
+  const [savingCategoryId, setSavingCategoryId] = useState<string | null>(null);
 
   const bookingMode =
     draft.bookingMode ?? (tenant?.bookingMode === "MANUAL" ? "MANUAL" : "AUTOMATIC");
@@ -116,6 +136,92 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
       cancelled = true;
     };
   }, [tenantId, isOwner, billingEnabled]);
+
+  useEffect(() => {
+    if (!tenantId || !isOwner) return;
+    let cancelled = false;
+    void Promise.all([
+      catalogApi.listCategories(tenantId),
+      tenantApi.listDamageFeeCategories(tenantId),
+    ])
+      .then(([rows, amounts]) => {
+        if (cancelled) return;
+        setCategories(rows);
+        setCategoryAmounts(
+          Object.fromEntries(
+            amounts.map((amount) => [
+              amount.categoryId ?? "",
+              {
+                minor: amount.minorAmount ?? "",
+                moderate: amount.moderateAmount ?? "",
+                severe: amount.severeAmount ?? "",
+              },
+            ]),
+          ),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setCategories([]);
+          setCategoryError(
+            "Kategori atau nominalnya gagal dimuat. Muat ulang halaman untuk mencoba lagi.",
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setCategoriesBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tenantId, isOwner]);
+
+  const categoryValue = (
+    categoryId: string,
+    key: "minor" | "moderate" | "severe",
+  ): string => categoryAmounts[categoryId]?.[key] ?? "";
+
+  const setCategoryValue = (
+    categoryId: string,
+    key: "minor" | "moderate" | "severe",
+    value: string,
+  ) =>
+    setCategoryAmounts((current) => ({
+      ...current,
+      [categoryId]: {
+        ...{ minor: "", moderate: "", severe: "" },
+        ...current[categoryId],
+        [key]: value.replace(/\D/g, ""),
+      },
+    }));
+
+  const saveCategory = async (categoryId: string) => {
+    if (!tenantId) return;
+    const amount = (key: "minor" | "moderate" | "severe") =>
+      Number.parseInt(categoryValue(categoryId, key) || "0", 10);
+    setSavingCategoryId(categoryId);
+    try {
+      const saved = await tenantApi.upsertDamageFeeCategory(tenantId, {
+        categoryId,
+        minorAmount: amount("minor"),
+        moderateAmount: amount("moderate"),
+        severeAmount: amount("severe"),
+      });
+      setCategoryAmounts((current) => ({
+        ...current,
+        [categoryId]: {
+          minor: saved.minorAmount ?? "0",
+          moderate: saved.moderateAmount ?? "0",
+          severe: saved.severeAmount ?? "0",
+        },
+      }));
+      notify("Nominal kategori disimpan.", "success");
+    } catch (caught) {
+      notify(describeApiError(caught), "error");
+    } finally {
+      setSavingCategoryId(null);
+    }
+  };
 
   const save = async () => {
     if (!tenant?.id) return;
@@ -560,6 +666,79 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
                   tidak mengubah usulan inspeksi yang sedang berjalan. Usulan tidak otomatis menagih atau
                   memotong deposit.
                 </p>
+
+                <div className="stack-sm">
+                  <div>
+                    <p className="text-sm">
+                      <strong>Nominal denda per kategori produk</strong>
+                    </p>
+                    <p className="text-xs text-muted">
+                      Override ini dipakai menggantikan nominal umum saat inspeksi dibuat. Kosongkan
+                      (Rp0) untuk tetap memakai nominal umum.
+                    </p>
+                  </div>
+                  {categoryError ? <InlineAlert tone="warning">{categoryError}</InlineAlert> : null}
+                  {categoriesBusy ? <LoadingBlock rows={2} /> : null}
+                  {!categoriesBusy && !categoryError && categories.length === 0 ? (
+                    <EmptyState
+                      title="Belum ada kategori produk"
+                      description="Tambahkan kategori di katalog untuk mengatur nominal denda khusus."
+                    />
+                  ) : null}
+                  {!categoriesBusy &&
+                    categories.map((category) => {
+                      const categoryId = category.id ?? "";
+                      return (
+                        <div key={categoryId} className="panel" style={{ boxShadow: "none" }}>
+                          <div className="panel-body stack-sm">
+                            <p className="text-sm">
+                              <strong>{category.name ?? "Kategori"}</strong>
+                            </p>
+                            <div className="form-grid">
+                              <TextInput
+                                label={`${category.name ?? "Kategori"} — ringan (Rp)`}
+                                inputMode="numeric"
+                                value={categoryValue(categoryId, "minor")}
+                                disabled={!damageFeeEnabled}
+                                onChange={(event) =>
+                                  setCategoryValue(categoryId, "minor", event.target.value)
+                                }
+                              />
+                              <TextInput
+                                label={`${category.name ?? "Kategori"} — sedang (Rp)`}
+                                inputMode="numeric"
+                                value={categoryValue(categoryId, "moderate")}
+                                disabled={!damageFeeEnabled}
+                                onChange={(event) =>
+                                  setCategoryValue(categoryId, "moderate", event.target.value)
+                                }
+                              />
+                              <TextInput
+                                label={`${category.name ?? "Kategori"} — parah (Rp)`}
+                                inputMode="numeric"
+                                value={categoryValue(categoryId, "severe")}
+                                disabled={!damageFeeEnabled}
+                                onChange={(event) =>
+                                  setCategoryValue(categoryId, "severe", event.target.value)
+                                }
+                              />
+                            </div>
+                            <div className="form-actions">
+                              <Button
+                                size="sm"
+                                variant="secondary"
+                                loading={savingCategoryId === categoryId}
+                                disabled={!damageFeeEnabled}
+                                onClick={() => void saveCategory(categoryId)}
+                              >
+                                Simpan kategori
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
               </div>
             </PanelBody>
           </Panel>

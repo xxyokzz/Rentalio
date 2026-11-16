@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
   listInvoices: vi.fn(),
   createInvoice: vi.fn(),
   updateSettings: vi.fn(),
+  listCategories: vi.fn(),
+  listDamageFeeCategories: vi.fn(),
+  upsertDamageFeeCategory: vi.fn(),
   refresh: vi.fn(),
   notify: vi.fn(),
 }));
@@ -28,8 +31,13 @@ vi.mock("@/shared/ui/overlays", () => ({
 }));
 
 vi.mock("@/shared/api/endpoints", () => ({
-  tenantApi: { updateSettings: mocks.updateSettings },
+  tenantApi: {
+    updateSettings: mocks.updateSettings,
+    listDamageFeeCategories: mocks.listDamageFeeCategories,
+    upsertDamageFeeCategory: mocks.upsertDamageFeeCategory,
+  },
   billingApi: { listInvoices: mocks.listInvoices, createInvoice: mocks.createInvoice },
+  catalogApi: { listCategories: mocks.listCategories },
 }));
 
 afterEach(cleanup);
@@ -37,6 +45,9 @@ afterEach(cleanup);
 beforeEach(() => {
   mocks.listInvoices.mockReset().mockResolvedValue([]);
   mocks.createInvoice.mockReset();
+  mocks.listCategories.mockReset().mockResolvedValue([]);
+  mocks.listDamageFeeCategories.mockReset().mockResolvedValue([]);
+  mocks.upsertDamageFeeCategory.mockReset();
 });
 
 function makeTenant(
@@ -126,6 +137,77 @@ describe("TenantSettings — plafon denda kerusakan", () => {
         expect.objectContaining({ damageFeeMaxAmount: null }),
       ),
     );
+  });
+});
+
+describe("TenantSettings — denda per kategori produk", () => {
+  function damageTenant(): Schema<"TenantResponse"> {
+    return {
+      ...makeTenant({ paymentEnabled: false, priceAmount: null, periodDays: 30 }),
+      damageInspectionEnabled: true,
+      damageFeeEnabled: true,
+      damageFeeSevereAmount: "100000",
+    };
+  }
+
+  it("memuat nominal tersimpan lalu menyimpannya kembali sebagai integer rupiah", async () => {
+    tenant = damageTenant();
+    mocks.listCategories.mockResolvedValue([{ id: "cat-1", name: "Elektronik" }]);
+    mocks.listDamageFeeCategories.mockResolvedValue([
+      { categoryId: "cat-1", minorAmount: "10000", moderateAmount: "25000", severeAmount: "50000" },
+    ]);
+    mocks.upsertDamageFeeCategory.mockResolvedValue({
+      categoryId: "cat-1",
+      minorAmount: "10000",
+      moderateAmount: "25000",
+      severeAmount: "55000",
+    });
+    render(<TenantSettings supportWhatsApp="" />);
+
+    const severe = await screen.findByLabelText("Elektronik — parah (Rp)");
+    expect(severe).toHaveValue("50000");
+    expect(screen.getByLabelText("Elektronik — ringan (Rp)")).toHaveValue("10000");
+
+    fireEvent.change(severe, { target: { value: "55000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Simpan kategori" }));
+
+    await waitFor(() =>
+      expect(mocks.upsertDamageFeeCategory).toHaveBeenCalledWith("tenant-1", {
+        categoryId: "cat-1",
+        minorAmount: 10000,
+        moderateAmount: 25000,
+        severeAmount: 55000,
+      }),
+    );
+    expect(mocks.notify).toHaveBeenCalledWith("Nominal kategori disimpan.", "success");
+  });
+
+  it("menampilkan keadaan kosong saat belum ada kategori", async () => {
+    tenant = damageTenant();
+    render(<TenantSettings supportWhatsApp="" />);
+
+    expect(await screen.findByText("Belum ada kategori produk")).toBeInTheDocument();
+  });
+
+  it("menampilkan peringatan saat kategori atau nominalnya gagal dimuat", async () => {
+    tenant = damageTenant();
+    mocks.listDamageFeeCategories.mockRejectedValue(new Error("jaringan gagal"));
+    render(<TenantSettings supportWhatsApp="" />);
+
+    expect(await screen.findByText(/gagal dimuat/i)).toBeInTheDocument();
+    // Jangan tampilkan keadaan kosong palsu saat datanya sebenarnya error.
+    expect(screen.queryByText("Belum ada kategori produk")).toBeNull();
+  });
+
+  it("menonaktifkan input dan tombol simpan kategori saat denda kerusakan mati", async () => {
+    tenant = { ...damageTenant(), damageFeeEnabled: false };
+    mocks.listCategories.mockResolvedValue([{ id: "cat-1", name: "Elektronik" }]);
+    render(<TenantSettings supportWhatsApp="" />);
+
+    const minor = await screen.findByLabelText("Elektronik — ringan (Rp)");
+    expect(minor).toBeDisabled();
+    expect(screen.getByLabelText("Elektronik — parah (Rp)")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Simpan kategori" })).toBeDisabled();
   });
 });
 
