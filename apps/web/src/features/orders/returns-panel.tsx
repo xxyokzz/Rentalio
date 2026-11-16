@@ -18,21 +18,11 @@ import { CheckboxField, SelectInput, TextArea, TextInput } from "@/shared/ui/for
 import { ConfirmDialog, Dialog, useToast } from "@/shared/ui/overlays";
 import { Panel, PanelHead, StatusBadge } from "@/shared/ui/surfaces";
 import { EmptyState, InlineAlert } from "@/shared/ui/states";
+import { itemLabel } from "./item-label";
 
 type Order = Schema<"OrderResponse">;
 type ReturnRecord = Schema<"ReturnRecordResponse">;
 type Inspection = Schema<"InspectionResponse">;
-type OrderItem = NonNullable<Order["items"]>[number];
-
-/**
- * Label baris order untuk dipilih petugas: nama produk, bukan UUID.
- * UUID produk hanya dipakai sebagai fallback bila katalog gagal dimuat.
- */
-function itemLabel(item: OrderItem, productNames?: Map<string, string>): string {
-  const name = productNames?.get(item.productId ?? "") ?? "Item";
-  // Unit fisik dibedakan lewat potongan kode pendek, bukan UUID penuh.
-  return item.assetId ? `${name} · unit ${item.assetId.slice(-6)}` : name;
-}
 
 export function ReturnsPanel({
   tenantId,
@@ -46,7 +36,7 @@ export function ReturnsPanel({
   order: Order;
   returns: ReturnRecord[];
   inspections: Inspection[];
-  productNames?: Map<string, string>;
+  productNames: Map<string, string>;
   onChanged: () => void;
 }) {
   const { role, tenant } = useSession();
@@ -161,7 +151,7 @@ export function ReturnsPanel({
                     <td className="text-sm">
                       {(record.items ?? []).map((item) => (
                         <div key={item.id}>
-                          {item.productId} × {item.quantity}
+                          {itemLabel(item, productNames)} × {item.quantity}
                           {item.conditionNote ? <div className="text-xs text-muted">{item.conditionNote}</div> : null}
                         </div>
                       ))}
@@ -305,6 +295,7 @@ export function ReturnsPanel({
         onClose={() => setCreateOpen(false)}
         tenantId={tenantId}
         order={order}
+        productNames={productNames}
         onSaved={() => {
           notify("Pengembalian dicatat (PENDING).", "success");
           setCreateOpen(false);
@@ -383,7 +374,7 @@ export function ReturnsPanel({
       />
 
       <SubmitInspectionDialog
-        key={submitting?.id ?? "none"}
+        key={submitting?.id ?? "submit-dialog"}
         inspection={submitting}
         suggestedPenalty={suggestedPenaltyFor(submitting)}
         tenantId={tenantId}
@@ -461,7 +452,7 @@ export function ReturnsPanel({
       </ConfirmDialog>
 
       <DecideInspectionDialog
-        key={deciding?.id ?? "none"}
+        key={deciding?.id ?? "decision-dialog"}
         inspection={deciding}
         tenantId={tenantId}
         onClose={() => setDeciding(null)}
@@ -481,6 +472,7 @@ function CreateReturnDialog({
   onClose,
   tenantId,
   order,
+  productNames,
   onSaved,
   onError,
 }: {
@@ -488,6 +480,7 @@ function CreateReturnDialog({
   onClose: () => void;
   tenantId: string;
   order: Order;
+  productNames: Map<string, string>;
   onSaved: () => void;
   onError: (message: string) => void;
 }) {
@@ -554,7 +547,7 @@ function CreateReturnDialog({
             <div className="panel" key={item.id} style={{ boxShadow: "none" }}>
               <div className="panel-body stack-sm">
                 <CheckboxField
-                  label={`Sertakan item ${item.productId ?? ""}${item.assetId ? ` · unit ${item.assetId}` : ""}`}
+                  label={`Sertakan ${itemLabel(item, productNames)}`}
                   checked={included[item.id ?? ""] ?? false}
                   onChange={(value) =>
                     setIncluded((current) => ({ ...current, [item.id ?? ""]: value }))
@@ -613,7 +606,7 @@ function CreateInspectionDialog({
   orderId: string;
   returns: ReturnRecord[];
   orderItems: NonNullable<Order["items"]>;
-  productNames?: Map<string, string>;
+  productNames: Map<string, string>;
   onSaved: () => void;
   onError: (message: string) => void;
 }) {

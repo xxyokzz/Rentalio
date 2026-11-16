@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { orderApi, returnApi, type Schema } from "@/shared/api/endpoints";
+import { catalogApi, orderApi, returnApi, type Schema } from "@/shared/api/endpoints";
 import { formatDateTime } from "@/shared/format/date";
 import { orderStatus, returnStatus } from "@/shared/format/status";
 import { useSession } from "@/shared/auth/session";
@@ -9,6 +9,7 @@ import { useApi } from "@/shared/hooks/useApi";
 import { LinkButton } from "@/shared/ui/buttons";
 import { PageHeader, Panel, PanelHead, Stat, StatusBadge } from "@/shared/ui/surfaces";
 import { EmptyState, InlineAlert, QueryState } from "@/shared/ui/states";
+import { buildProductNames, itemLabel } from "@/features/orders/item-label";
 
 interface ReturnRow {
   orderId: string;
@@ -21,6 +22,7 @@ interface ReturnsData {
   rows: ReturnRow[];
   activeOrders: Schema<"OrderResponse">[];
   waitingReturn: Schema<"OrderResponse">[];
+  productNames: Map<string, string>;
 }
 
 export function ReturnsPage() {
@@ -30,9 +32,11 @@ export function ReturnsPage() {
   const state = useApi<ReturnsData>(
     tenantId
       ? async () => {
-          const [active, returning] = await Promise.all([
+          const [active, returning, products] = await Promise.all([
             orderApi.list(tenantId, { status: "ACTIVE", pageSize: 50 }),
             orderApi.list(tenantId, { status: "RETURN_IN_PROGRESS", pageSize: 50 }),
+            // Nama produk untuk label item; kegagalan katalog tidak memblokir daftar.
+            catalogApi.listProducts(tenantId).catch(() => []),
           ]);
           const orders = [...active.data, ...returning.data];
           const lists = await Promise.all(
@@ -55,6 +59,7 @@ export function ReturnsPage() {
             ),
             activeOrders: active.data,
             waitingReturn: returning.data,
+            productNames: buildProductNames(products),
           };
         }
       : null,
@@ -129,7 +134,7 @@ export function ReturnsPage() {
                             <td className="text-sm">
                               {(row.record.items ?? []).map((item) => (
                                 <div key={item.id}>
-                                  {item.assetId ? `Unit ${item.assetId}` : item.productId} × {item.quantity}
+                                  {itemLabel(item, data.productNames)} × {item.quantity}
                                   {item.conditionNote ? (
                                     <div className="text-xs text-muted">{item.conditionNote}</div>
                                   ) : null}

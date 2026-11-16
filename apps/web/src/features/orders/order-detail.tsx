@@ -37,6 +37,7 @@ import { PaymentsPanel } from "./payments-panel";
 import { DepositPanel } from "./deposit-panel";
 import { CollateralPanel } from "./collateral-panel";
 import { ReturnsPanel } from "./returns-panel";
+import { buildProductNames, itemLabel } from "./item-label";
 import { ExtensionsPanel } from "./extensions-panel";
 
 type Order = Schema<"OrderResponse">;
@@ -70,11 +71,14 @@ export function OrderDetail({ orderId }: { orderId: string }) {
             extensionApi.list(tenantId, orderId),
             catalogApi.listProducts(tenantId).catch(() => []),
           ]);
-          const productNames = new Map<string, string>();
-          for (const product of products) {
-            if (product.id) productNames.set(product.id, product.name ?? product.id);
-          }
-          return { order, refunds, returns, inspections, extensions, productNames };
+          return {
+            order,
+            refunds,
+            returns,
+            inspections,
+            extensions,
+            productNames: buildProductNames(products),
+          };
         }
       : null,
     [tenantId, orderId],
@@ -228,8 +232,10 @@ export function OrderDetail({ orderId }: { orderId: string }) {
                         <tbody>
                           {(data.order.items ?? []).map((item) => (
                             <tr key={item.id}>
-                              <td>{data.productNames.get(item.productId ?? "") ?? item.productId}</td>
-                              <td className="mono text-sm">{item.assetId ?? "—"}</td>
+                              <td>{itemLabel({ productId: item.productId }, data.productNames)}</td>
+                              <td className="mono text-sm">
+                                {item.assetId ? `#${item.assetId.slice(-6)}` : "—"}
+                              </td>
                               <td className="num">{item.quantity ?? 0}</td>
                               <td className="text-sm">
                                 {formatDateTime(item.startAt, timezone)} – {formatDateTime(item.endAt, timezone)}
