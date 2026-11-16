@@ -173,6 +173,14 @@ enum LateFeeUnit {
   HOUR
 }
 
+/// Tingkat kerusakan barang yang dilaporkan saat inspeksi (dokumen 15).
+/// Dipakai sebagai kunci nominal denda kondisi milik tenant.
+enum DamageSeverity {
+  MINOR // ringan
+  MODERATE // sedang
+  SEVERE // parah
+}
+
 enum AssetStatus {
   AVAILABLE
   RESERVED
@@ -504,6 +512,16 @@ model Tenant {
   lateFeeEnabled    Boolean     @default(false)
   lateFeeUnit       LateFeeUnit @default(DAY)
   lateFeeRateAmount BigInt      @default(0)
+
+  // Inspeksi kerusakan & denda kondisi (dokumen 15). Inspeksi aktif secara
+  // default karena alur serah-terima sudah memakainya; denda kondisi opt-in
+  // agar server tidak pernah mengarang nominal. Nominal per tingkat kondisi
+  // adalah IDR rupiah utuh dan disalin ke snapshot inspeksi saat dibuat.
+  damageInspectionEnabled Boolean @default(true)
+  damageFeeEnabled        Boolean @default(false)
+  damageFeeMinorAmount    BigInt  @default(0)
+  damageFeeModerateAmount BigInt  @default(0)
+  damageFeeSevereAmount   BigInt  @default(0)
 
   // Kontak publik tenant untuk katalog, portal pesanan, dan instruksi
   // pembayaran manual (Notion 14 §E). Semua opsional; UI tidak mengarang
@@ -1158,6 +1176,13 @@ model Inspection {
   approvedByUserId  String?          @db.Uuid
   summary           String? // ringkasan temuan
   penaltyAmount     BigInt? // nominal denda yang diputuskan (IDR rupiah utuh)
+  /// Tingkat kerusakan yang dilaporkan petugas.
+  severity          DamageSeverity?
+  /// Snapshot konfigurasi denda kondisi tenant saat inspeksi dibuat, supaya
+  /// perubahan pengaturan berikutnya tidak mengubah usulan inspeksi lama.
+  damagePolicySnapshot   Json?
+  /// Usulan denda otomatis dari snapshot + severity (bukan keputusan final).
+  suggestedPenaltyAmount BigInt?
   currency          String           @default("IDR")
   inspectedAt       DateTime?
   submittedAt       DateTime?

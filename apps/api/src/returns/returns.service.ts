@@ -14,6 +14,13 @@ import type {
 } from './returns.dto.js';
 import { InspectionDecisionDto } from './returns.dto.js';
 import { computeLateFee, type LateFeePolicy } from './late-fee.js';
+import {
+  computeDamageFee,
+  parseDamagePolicy,
+  serializeDamagePolicy,
+  type DamageFeePolicy,
+  type DamageSeverity,
+} from './damage-fee.js';
 
 type Ctx = { actorUserId: string; correlationId: string };
 
@@ -322,6 +329,16 @@ export class ReturnsService {
     return this.prisma.withTenant(tenantId, async (tx) => {
       await this.requireOrder(tx, tenantId, orderId);
 
+      // Saklar inspeksi dimiliki tenant; service menolak lebih dulu agar klien
+      // tidak bisa membuat inspeksi pada tenant yang mematikannya.
+      const damagePolicy = await this.damageFeeContext(tx, tenantId);
+      if (!damagePolicy.inspectionEnabled) {
+        throw new ApiError(
+          ErrorCode.BUSINESS_RULE_VIOLATION,
+          'Inspeksi kerusakan dinonaktifkan untuk toko ini.',
+        );
+      }
+
       let returnRecordId: string | null = null;
       if (dto.returnRecordId) {
         const returnRecord = await tx.returnRecord.findUnique({
@@ -355,6 +372,14 @@ export class ReturnsService {
         returnRecordId = dto.returnRecordId;
       }
 
+      // Snapshot konfigurasi saat inspeksi dibuat: perubahan nominal denda
+      // setelah ini tidak boleh menulis ulang usulan inspeksi yang berjalan.
+      const snapshot = serializeDamagePolicy(damagePolicy.policy);
+      const suggestion = computeDamageFee(
+        damagePolicy.policy,
+        (dto.severity ?? null) as DamageSeverity | null,
+      );
+
       const created = await tx.inspection.create({
         data: {
           tenantId,
@@ -362,6 +387,9 @@ export class ReturnsService {
           returnRecordId,
           summary: dto.summary?.trim() ?? null,
           inspectedByUserId: ctx.actorUserId,
+          severity: (dto.severity ?? null) as DamageSeverity | null,
+          damagePolicySnapshot: snapshot as unknown as Prisma.InputJsonValue,
+          suggestedPenaltyAmount: suggestion.amount ? BigInt(suggestion.amount) : null,
         },
         include: { attachments: true },
       });
@@ -376,7 +404,13 @@ export class ReturnsService {
           entityId: created.id,
           toState: created.status,
           correlationId: ctx.correlationId,
-          metadata: { orderId, returnRecordId },
+          metadata: {
+            orderId,
+            returnRecordId,
+            severity: dto.severity ?? null,
+            damageFeeEnabled: damagePolicy.policy.enabled,
+            suggestedPenaltyAmount: suggestion.amount,
+          },
         },
         tx,
       );
@@ -405,6 +439,12 @@ export class ReturnsService {
       }
 
       const now = new Date();
+      // Usulan dihitung dari SNAPSHOT inspeksi (bukan konfigurasi tenant saat
+      // ini), sehingga inspeksi lama tidak berubah saat owner mengganti nominal.
+      const policy = parseDamagePolicy(existing.damagePolicySnapshot);
+      const severity = (dto.severity ?? existing.severity ?? null) as DamageSeverity | null;
+      const suggestion = computeDamageFee(policy, severity);
+
       const updated = await tx.inspection.update({
         where: { id: inspectionId },
         data: {
@@ -413,6 +453,10 @@ export class ReturnsService {
           inspectedAt: existing.inspectedAt ?? now,
           inspectedByUserId: existing.inspectedByUserId ?? ctx.actorUserId,
           ...(dto.summary !== undefined && { summary: dto.summary?.trim() ?? null }),
+          ...(dto.severity !== undefined && {
+            severity: dto.severity as DamageSeverity,
+          }),
+          suggestedPenaltyAmount: suggestion.amount ? BigInt(suggestion.amount) : null,
           ...(dto.penaltyAmount !== undefined && {
             penaltyAmount: BigInt(dto.penaltyAmount),
           }),
@@ -431,7 +475,11 @@ export class ReturnsService {
           fromState: existing.status,
           toState: updated.status,
           correlationId: ctx.correlationId,
-          metadata: { orderId: existing.orderId },
+          metadata: {
+            orderId: existing.orderId,
+            severity,
+            suggestedPenaltyAmount: suggestion.amount,
+          },
         },
         tx,
       );
@@ -666,6 +714,37 @@ export class ReturnsService {
     };
   }
 
+  /**
+   * Konfigurasi inspeksi & denda kondisi tenant. Nilai uang dikirim balik ke
+   * klien sebagai string agar aman untuk BigInt.
+   */
+  private async damageFeeContext(
+    tx: Prisma.TransactionClient,
+    tenantId: string,
+  ): Promise<{ inspectionEnabled: boolean; policy: DamageFeePolicy }> {
+    const tenant = await tx.tenant.findUnique({
+      where: { id: tenantId },
+      select: {
+        damageInspectionEnabled: true,
+        damageFeeEnabled: true,
+        damageFeeMinorAmount: true,
+        damageFeeModerateAmount: true,
+        damageFeeSevereAmount: true,
+      },
+    });
+    return {
+      inspectionEnabled: tenant?.damageInspectionEnabled ?? false,
+      policy: {
+        enabled: tenant?.damageFeeEnabled ?? false,
+        amounts: {
+          MINOR: tenant?.damageFeeMinorAmount ?? 0n,
+          MODERATE: tenant?.damageFeeModerateAmount ?? 0n,
+          SEVERE: tenant?.damageFeeSevereAmount ?? 0n,
+        },
+      },
+    };
+  }
+
   private mapReturn(row: ReturnWithItems, lateFee: ReturnType<typeof computeLateFee>) {
     return {
       id: row.id,
@@ -697,6 +776,10 @@ export class ReturnsService {
       approvedByUserId: row.approvedByUserId,
       summary: row.summary,
       penaltyAmount: row.penaltyAmount?.toString() ?? null,
+      severity: row.severity,
+      suggestedPenaltyAmount: row.suggestedPenaltyAmount?.toString() ?? null,
+      // Usulan dibaca dari snapshot inspeksi, bukan konfigurasi tenant terkini.
+      damageFee: computeDamageFee(parseDamagePolicy(row.damagePolicySnapshot), row.severity),
       currency: row.currency,
       inspectedAt: row.inspectedAt,
       submittedAt: row.submittedAt,

@@ -317,6 +317,21 @@ components:
         lateFeeRateAmount:
           type: string
           description: Tarif denda per satuan, IDR rupiah utuh (string agar aman untuk nilai besar).
+        damageInspectionEnabled:
+          type: boolean
+          description: Saklar alur inspeksi kerusakan pasca-return milik tenant.
+        damageFeeEnabled:
+          type: boolean
+          description: Saklar usulan denda kondisi barang; nominal tetap tersimpan saat dimatikan.
+        damageFeeMinorAmount:
+          type: string
+          description: Nominal denda kondisi ringan, IDR rupiah utuh (string).
+        damageFeeModerateAmount:
+          type: string
+          description: Nominal denda kondisi sedang, IDR rupiah utuh (string).
+        damageFeeSevereAmount:
+          type: string
+          description: Nominal denda kondisi parah, IDR rupiah utuh (string).
         activatedAt:
           type: string
           format: date-time
@@ -462,6 +477,24 @@ components:
           type: integer
           minimum: 0
           description: Tarif denda per satuan dalam IDR rupiah utuh.
+        damageInspectionEnabled:
+          type: boolean
+          description: Saklar alur inspeksi kerusakan; wajib aktif sebelum denda kondisi diaktifkan.
+        damageFeeEnabled:
+          type: boolean
+          description: Saklar denda kondisi; wajib disertai minimal satu nominal lebih dari 0.
+        damageFeeMinorAmount:
+          type: integer
+          minimum: 0
+          description: Nominal denda kondisi ringan dalam IDR rupiah utuh.
+        damageFeeModerateAmount:
+          type: integer
+          minimum: 0
+          description: Nominal denda kondisi sedang dalam IDR rupiah utuh.
+        damageFeeSevereAmount:
+          type: integer
+          minimum: 0
+          description: Nominal denda kondisi parah dalam IDR rupiah utuh.
 
     InviteMemberRequest:
       type: object
@@ -1084,6 +1117,35 @@ components:
           type: string
           description: Total denda, IDR rupiah utuh.
 
+    DamageFeeResponse:
+      type: object
+      description: >-
+        Usulan denda kerusakan yang dihitung server dari snapshot konfigurasi
+        tenant saat inspeksi dibuat. Bukan tagihan otomatis dan bukan keputusan
+        final; `penaltyAmount` tetap diisi petugas berizin.
+      properties:
+        enabled:
+          type: boolean
+        severity:
+          type: [ string, 'null' ]
+          enum: [ MINOR, MODERATE, SEVERE, null ]
+        label:
+          type: [ string, 'null' ]
+          description: Label tingkat kondisi dalam bahasa Indonesia.
+        amount:
+          type: [ string, 'null' ]
+          description: Usulan denda, IDR rupiah utuh; null bila tidak ada usulan.
+        amounts:
+          type: object
+          description: Snapshot nominal per tingkat kondisi, IDR rupiah utuh.
+          properties:
+            MINOR:
+              type: string
+            MODERATE:
+              type: string
+            SEVERE:
+              type: string
+
     ReturnRecordDetail:
       allOf:
         - $ref: '#/components/schemas/ReturnRecordResponse'
@@ -1113,6 +1175,12 @@ components:
         summary:
           type: string
           maxLength: 2000
+        severity:
+          type: string
+          enum: [ MINOR, MODERATE, SEVERE ]
+          description: >-
+            Tingkat kerusakan (ringan/sedang/parah). Menentukan usulan denda
+            otomatis dari snapshot konfigurasi tenant; bukan keputusan final.
 
     SubmitInspectionRequest:
       type: object
@@ -1124,6 +1192,10 @@ components:
           type: integer
           minimum: 0
           description: Usulan denda, IDR rupiah utuh
+        severity:
+          type: string
+          enum: [ MINOR, MODERATE, SEVERE ]
+          description: Tingkat kerusakan; mengubah usulan denda otomatis dari snapshot inspeksi.
 
     DecideInspectionRequest:
       type: object
@@ -1187,6 +1259,17 @@ components:
         penaltyAmount:
           type: [ string, 'null' ]
           description: IDR rupiah utuh (BigInt sebagai string); null jika belum diputuskan
+        severity:
+          type: [ string, 'null' ]
+          enum: [ MINOR, MODERATE, SEVERE, null ]
+          description: Tingkat kerusakan yang dilaporkan petugas.
+        suggestedPenaltyAmount:
+          type: [ string, 'null' ]
+          description: >-
+            Usulan denda otomatis dari snapshot konfigurasi tenant saat inspeksi
+            dibuat; null bila saklar denda mati atau tingkat kondisi kosong.
+        damageFee:
+          $ref: '#/components/schemas/DamageFeeResponse'
         currency:
           type: string
           default: IDR

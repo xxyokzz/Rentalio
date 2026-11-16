@@ -52,15 +52,22 @@ export function ReturnsPanel({
   const completedReturns = returns.filter((item) => item.status === "COMPLETED");
 
   /**
-   * Denda keterlambatan yang dihitung server untuk pengembalian milik inspeksi
-   * ini. Hanya menjadi nilai awal; keputusan akhir tetap milik petugas.
+   * Usulan denda dari server untuk inspeksi ini: denda kondisi (dari snapshot
+   * inspeksi) ditambah denda keterlambatan pengembalian terkait. Hanya nilai
+   * awal; keputusan akhir tetap milik petugas.
    */
   const suggestedPenaltyFor = (inspection: Inspection | null): string => {
+    const damage = Number.parseInt(inspection?.suggestedPenaltyAmount ?? "0", 10);
     const returnId = inspection?.returnRecordId;
-    if (!returnId) return "";
-    const lateFee = returns.find((record) => record.id === returnId)?.lateFee;
-    if (!lateFee?.enabled || !lateFee.units || lateFee.units === 0) return "";
-    return lateFee.amount ?? "";
+    const lateFee = returnId
+      ? returns.find((record) => record.id === returnId)?.lateFee
+      : undefined;
+    const late =
+      lateFee?.enabled && (lateFee.units ?? 0) > 0
+        ? Number.parseInt(lateFee.amount ?? "0", 10)
+        : 0;
+    const total = (Number.isFinite(damage) ? damage : 0) + (Number.isFinite(late) ? late : 0);
+    return total > 0 ? String(total) : "";
   };
 
   return (
@@ -180,6 +187,7 @@ export function ReturnsPanel({
               <tr>
                 <th scope="col">Dibuat</th>
                 <th scope="col">Status</th>
+                <th scope="col">Kondisi</th>
                 <th scope="col">Ringkasan</th>
                 <th scope="col" className="num">
                   Denda
@@ -192,7 +200,7 @@ export function ReturnsPanel({
             <tbody>
               {inspections.length === 0 ? (
                 <tr className="table-empty">
-                  <td colSpan={5}>
+                  <td colSpan={6}>
                     {completedReturns.length === 0
                       ? "Selesaikan pengembalian terlebih dahulu untuk membuat inspeksi."
                       : "Belum ada inspeksi."}
@@ -204,6 +212,14 @@ export function ReturnsPanel({
                     <td className="text-sm">{formatDateTime(inspection.createdAt, timezone)}</td>
                     <td>
                       <StatusBadge status={inspectionStatus(inspection.status)} />
+                    </td>
+                    <td className="text-sm">
+                      {inspection.damageFee?.label ?? "—"}
+                      {inspection.suggestedPenaltyAmount ? (
+                        <div className="text-xs text-muted">
+                          usulan {formatIDR(inspection.suggestedPenaltyAmount)}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="text-sm">{inspection.summary ?? "—"}</td>
                     <td className="num money">
@@ -480,6 +496,7 @@ function CreateInspectionDialog({
 }) {
   const [returnRecordId, setReturnRecordId] = useState("");
   const [summary, setSummary] = useState("");
+  const [severity, setSeverity] = useState<"" | "MINOR" | "MODERATE" | "SEVERE">("");
   const [busy, setBusy] = useState(false);
 
   const submit = async (event: React.FormEvent) => {
@@ -489,6 +506,7 @@ function CreateInspectionDialog({
       await inspectionApi.create(tenantId, orderId, {
         returnRecordId: returnRecordId || null,
         summary: summary.trim() || undefined,
+        severity: severity || undefined,
       });
       onSaved();
     } catch (caught) {
@@ -529,6 +547,19 @@ function CreateInspectionDialog({
             </option>
           ))}
         </SelectInput>
+        <SelectInput
+          label="Tingkat kerusakan (opsional)"
+          value={severity}
+          onChange={(event) =>
+            setSeverity(event.target.value as "" | "MINOR" | "MODERATE" | "SEVERE")
+          }
+          hint="Usulan denda dihitung server dari tingkat ini dan snapshot pengaturan toko."
+        >
+          <option value="">Tidak ada kerusakan</option>
+          <option value="MINOR">Ringan</option>
+          <option value="MODERATE">Sedang</option>
+          <option value="SEVERE">Parah</option>
+        </SelectInput>
         <TextArea
           label="Ringkasan temuan"
           rows={3}
@@ -559,6 +590,9 @@ function SubmitInspectionDialog({
 }) {
   const [summary, setSummary] = useState(inspection?.summary ?? "");
   const [penalty, setPenalty] = useState(suggestedPenalty);
+  const [severity, setSeverity] = useState<"" | "MINOR" | "MODERATE" | "SEVERE">(
+    (inspection?.severity as "MINOR" | "MODERATE" | "SEVERE" | undefined) ?? "",
+  );
   const [busy, setBusy] = useState(false);
 
   const submit = async (event: React.FormEvent) => {
@@ -568,6 +602,7 @@ function SubmitInspectionDialog({
     try {
       await inspectionApi.submit(tenantId, inspection.id, {
         summary: summary.trim() || undefined,
+        severity: severity || undefined,
         penaltyAmount: penalty ? Number.parseInt(penalty, 10) : undefined,
       });
       onSaved();
@@ -596,6 +631,19 @@ function SubmitInspectionDialog({
       }
     >
       <form id="submit-inspection" className="stack" onSubmit={submit}>
+        <SelectInput
+          label="Tingkat kerusakan"
+          value={severity}
+          onChange={(event) =>
+            setSeverity(event.target.value as "" | "MINOR" | "MODERATE" | "SEVERE")
+          }
+          hint="Mengubah tingkat di sini menghitung ulang usulan dari snapshot inspeksi, bukan tarif terbaru."
+        >
+          <option value="">Tidak ada kerusakan</option>
+          <option value="MINOR">Ringan</option>
+          <option value="MODERATE">Sedang</option>
+          <option value="SEVERE">Parah</option>
+        </SelectInput>
         <TextArea label="Ringkasan" rows={3} value={summary} onChange={(event) => setSummary(event.target.value)} />
         <TextInput
           label="Usulan denda (Rp)"
@@ -604,7 +652,7 @@ function SubmitInspectionDialog({
           onChange={(event) => setPenalty(event.target.value.replace(/\D/g, ""))}
           hint={
             suggestedPenalty
-              ? "Terisi dari denda keterlambatan yang dihitung server; sesuaikan bila perlu. Denda tidak otomatis dipotong dari deposit."
+              ? "Terisi dari usulan denda kondisi + keterlambatan yang dihitung server; sesuaikan bila perlu. Denda tidak otomatis dipotong dari deposit."
               : "Kondisi aman tetap Rp0. Denda tidak otomatis dipotong dari deposit."
           }
         />

@@ -201,6 +201,11 @@ export class TenantService {
     lateFeeEnabled: boolean;
     lateFeeUnit: string;
     lateFeeRateAmount: string;
+    damageInspectionEnabled: boolean;
+    damageFeeEnabled: boolean;
+    damageFeeMinorAmount: string;
+    damageFeeModerateAmount: string;
+    damageFeeSevereAmount: string;
     activatedAt: Date | null;
     trialEndsAt: Date | null;
     /** Status langganan efektif — dipakai UI untuk mode terbatas (bukan hitungan klien). */
@@ -250,6 +255,11 @@ export class TenantService {
         lateFeeEnabled: tenant.lateFeeEnabled,
         lateFeeUnit: tenant.lateFeeUnit,
         lateFeeRateAmount: tenant.lateFeeRateAmount.toString(),
+        damageInspectionEnabled: tenant.damageInspectionEnabled,
+        damageFeeEnabled: tenant.damageFeeEnabled,
+        damageFeeMinorAmount: tenant.damageFeeMinorAmount.toString(),
+        damageFeeModerateAmount: tenant.damageFeeModerateAmount.toString(),
+        damageFeeSevereAmount: tenant.damageFeeSevereAmount.toString(),
         activatedAt: tenant.activatedAt,
         trialEndsAt: tenant.trialEndsAt,
         subscription: {
@@ -305,6 +315,48 @@ export class TenantService {
         }
       }
 
+      // Denda kondisi butuh alur inspeksi sebagai tempat usulannya. Menolak di
+      // server supaya owner tidak mengira dendanya aktif padahal tidak pernah
+      // muncul, dan menolak semua-nol karena tidak ada tingkat yang bisa dipakai.
+      const touchedDamage =
+        dto.damageInspectionEnabled !== undefined ||
+        dto.damageFeeEnabled !== undefined ||
+        dto.damageFeeMinorAmount !== undefined ||
+        dto.damageFeeModerateAmount !== undefined ||
+        dto.damageFeeSevereAmount !== undefined;
+      if (touchedDamage) {
+        const current = await tx.tenant.findUnique({
+          where: { id: tenantId },
+          select: {
+            damageInspectionEnabled: true,
+            damageFeeEnabled: true,
+            damageFeeMinorAmount: true,
+            damageFeeModerateAmount: true,
+            damageFeeSevereAmount: true,
+          },
+        });
+        const nextInspection =
+          dto.damageInspectionEnabled ?? current?.damageInspectionEnabled ?? false;
+        const nextFee = dto.damageFeeEnabled ?? current?.damageFeeEnabled ?? false;
+        const nextAmounts = [
+          dto.damageFeeMinorAmount ?? Number(current?.damageFeeMinorAmount ?? 0n),
+          dto.damageFeeModerateAmount ?? Number(current?.damageFeeModerateAmount ?? 0n),
+          dto.damageFeeSevereAmount ?? Number(current?.damageFeeSevereAmount ?? 0n),
+        ];
+        if (nextFee && !nextInspection) {
+          throw new ApiError(
+            ErrorCode.VALIDATION_ERROR,
+            'Inspeksi kerusakan harus aktif sebelum denda kondisi diaktifkan.',
+          );
+        }
+        if (nextFee && nextAmounts.every((amount) => amount <= 0)) {
+          throw new ApiError(
+            ErrorCode.VALIDATION_ERROR,
+            'Isi minimal satu nominal denda kondisi (ringan, sedang, atau parah) sebelum diaktifkan.',
+          );
+        }
+      }
+
       await tx.tenant.update({
         where: { id: tenantId },
         data: {
@@ -326,6 +378,19 @@ export class TenantService {
           ...(dto.lateFeeUnit !== undefined && { lateFeeUnit: dto.lateFeeUnit }),
           ...(dto.lateFeeRateAmount !== undefined && {
             lateFeeRateAmount: BigInt(dto.lateFeeRateAmount),
+          }),
+          ...(dto.damageInspectionEnabled !== undefined && {
+            damageInspectionEnabled: dto.damageInspectionEnabled,
+          }),
+          ...(dto.damageFeeEnabled !== undefined && { damageFeeEnabled: dto.damageFeeEnabled }),
+          ...(dto.damageFeeMinorAmount !== undefined && {
+            damageFeeMinorAmount: BigInt(dto.damageFeeMinorAmount),
+          }),
+          ...(dto.damageFeeModerateAmount !== undefined && {
+            damageFeeModerateAmount: BigInt(dto.damageFeeModerateAmount),
+          }),
+          ...(dto.damageFeeSevereAmount !== undefined && {
+            damageFeeSevereAmount: BigInt(dto.damageFeeSevereAmount),
           }),
         },
       });

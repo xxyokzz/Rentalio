@@ -2384,6 +2384,16 @@ export interface components {
             lateFeeUnit?: "DAY" | "HOUR";
             /** @description Tarif denda per satuan, IDR rupiah utuh (string agar aman untuk nilai besar). */
             lateFeeRateAmount?: string;
+            /** @description Saklar alur inspeksi kerusakan pasca-return milik tenant. */
+            damageInspectionEnabled?: boolean;
+            /** @description Saklar usulan denda kondisi barang; nominal tetap tersimpan saat dimatikan. */
+            damageFeeEnabled?: boolean;
+            /** @description Nominal denda kondisi ringan, IDR rupiah utuh (string). */
+            damageFeeMinorAmount?: string;
+            /** @description Nominal denda kondisi sedang, IDR rupiah utuh (string). */
+            damageFeeModerateAmount?: string;
+            /** @description Nominal denda kondisi parah, IDR rupiah utuh (string). */
+            damageFeeSevereAmount?: string;
             /** Format: date-time */
             activatedAt?: string | null;
             /** Format: date-time */
@@ -2485,6 +2495,16 @@ export interface components {
             lateFeeUnit?: "DAY" | "HOUR";
             /** @description Tarif denda per satuan dalam IDR rupiah utuh. */
             lateFeeRateAmount?: number;
+            /** @description Saklar alur inspeksi kerusakan; wajib aktif sebelum denda kondisi diaktifkan. */
+            damageInspectionEnabled?: boolean;
+            /** @description Saklar denda kondisi; wajib disertai minimal satu nominal lebih dari 0. */
+            damageFeeEnabled?: boolean;
+            /** @description Nominal denda kondisi ringan dalam IDR rupiah utuh. */
+            damageFeeMinorAmount?: number;
+            /** @description Nominal denda kondisi sedang dalam IDR rupiah utuh. */
+            damageFeeModerateAmount?: number;
+            /** @description Nominal denda kondisi parah dalam IDR rupiah utuh. */
+            damageFeeSevereAmount?: number;
         };
         InviteMemberRequest: {
             /** Format: email */
@@ -2831,6 +2851,22 @@ export interface components {
             /** @description Total denda, IDR rupiah utuh. */
             amount?: string;
         };
+        /** @description Usulan denda kerusakan yang dihitung server dari snapshot konfigurasi tenant saat inspeksi dibuat. Bukan tagihan otomatis dan bukan keputusan final; `penaltyAmount` tetap diisi petugas berizin. */
+        DamageFeeResponse: {
+            enabled?: boolean;
+            /** @enum {string|null} */
+            severity?: "MINOR" | "MODERATE" | "SEVERE" | null;
+            /** @description Label tingkat kondisi dalam bahasa Indonesia. */
+            label?: string | null;
+            /** @description Usulan denda, IDR rupiah utuh; null bila tidak ada usulan. */
+            amount?: string | null;
+            /** @description Snapshot nominal per tingkat kondisi, IDR rupiah utuh. */
+            amounts?: {
+                MINOR?: string;
+                MODERATE?: string;
+                SEVERE?: string;
+            };
+        };
         ReturnRecordDetail: components["schemas"]["ReturnRecordResponse"] & {
             inspections?: {
                 /** Format: uuid */
@@ -2845,11 +2881,21 @@ export interface components {
             /** Format: uuid */
             returnRecordId?: string | null;
             summary?: string;
+            /**
+             * @description Tingkat kerusakan (ringan/sedang/parah). Menentukan usulan denda otomatis dari snapshot konfigurasi tenant; bukan keputusan final.
+             * @enum {string}
+             */
+            severity?: "MINOR" | "MODERATE" | "SEVERE";
         };
         SubmitInspectionRequest: {
             summary?: string;
             /** @description Usulan denda, IDR rupiah utuh */
             penaltyAmount?: number;
+            /**
+             * @description Tingkat kerusakan; mengubah usulan denda otomatis dari snapshot inspeksi.
+             * @enum {string}
+             */
+            severity?: "MINOR" | "MODERATE" | "SEVERE";
         };
         DecideInspectionRequest: {
             /** @enum {string} */
@@ -2886,6 +2932,14 @@ export interface components {
             summary?: string | null;
             /** @description IDR rupiah utuh (BigInt sebagai string); null jika belum diputuskan */
             penaltyAmount?: string | null;
+            /**
+             * @description Tingkat kerusakan yang dilaporkan petugas.
+             * @enum {string|null}
+             */
+            severity?: "MINOR" | "MODERATE" | "SEVERE" | null;
+            /** @description Usulan denda otomatis dari snapshot konfigurasi tenant saat inspeksi dibuat; null bila saklar denda mati atau tingkat kondisi kosong. */
+            suggestedPenaltyAmount?: string | null;
+            damageFee?: components["schemas"]["DamageFeeResponse"];
             /** @default IDR */
             currency: string;
             /** Format: date-time */

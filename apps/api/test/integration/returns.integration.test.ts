@@ -722,3 +722,214 @@ describe('Denda keterlambatan — pengaturan owner & perhitungan server', () => 
     expect(completed.body.data.lateFee.amount).toBe('0');
   });
 });
+
+// ============================================================
+// Inspeksi kerusakan & denda kondisi (dokumen 15)
+// ============================================================
+
+describe('Denda kerusakan — pengaturan owner, snapshot, dan usulan otomatis', () => {
+  function setDamage(fx: Fixture, body: Record<string, unknown>): request.Test {
+    return auth(request(server).patch(`${base(fx.tenantId)}/settings`), fx).send(body);
+  }
+
+  /** Pengembalian COMPLETED siap diinspeksi. */
+  async function completedReturn(fx: Fixture): Promise<string> {
+    const created = await createReturn(fx);
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const completed = await completeReturn(fx, created.body.data.id);
+    expect(completed.status, JSON.stringify(completed.body)).toBe(200);
+    return created.body.data.id as string;
+  }
+
+  async function createInspectionFor(
+    fx: Fixture,
+    body: Record<string, unknown>,
+  ): Promise<request.Response> {
+    return auth(
+      request(server).post(`${base(fx.tenantId)}/orders/${fx.orderId}/inspections`),
+      fx,
+    ).send(body);
+  }
+
+  it('menolak konfigurasi denda yang tidak bisa dipakai', async () => {
+    const fx = await setupOrder('dmgcfg');
+
+    // Denda kondisi tanpa alur inspeksi tidak punya tempat usulan.
+    const noInspection = await setDamage(fx, {
+      damageInspectionEnabled: false,
+      damageFeeEnabled: true,
+      damageFeeMinorAmount: 25_000,
+    });
+    expect(noInspection.status).toBe(400);
+    expect(noInspection.body.error.code).toBe('VALIDATION_ERROR');
+
+    // Aktif dengan semua nominal nol berarti tidak ada usulan yang mungkin.
+    const allZero = await setDamage(fx, { damageFeeEnabled: true });
+    expect(allZero.status).toBe(400);
+
+    const negative = await setDamage(fx, { damageFeeMinorAmount: -1 });
+    expect(negative.status).toBe(400);
+
+    const ok = await setDamage(fx, {
+      damageInspectionEnabled: true,
+      damageFeeEnabled: true,
+      damageFeeMinorAmount: 25_000,
+      damageFeeModerateAmount: 100_000,
+      damageFeeSevereAmount: 400_000,
+    });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(204);
+
+    const tenant = await auth(request(server).get(`${base(fx.tenantId)}`), fx);
+    expect(tenant.body.data).toMatchObject({
+      damageInspectionEnabled: true,
+      damageFeeEnabled: true,
+      damageFeeMinorAmount: '25000',
+      damageFeeModerateAmount: '100000',
+      damageFeeSevereAmount: '400000',
+    });
+
+    // Saklar denda bisa dimatikan tanpa kehilangan nominal tersimpan.
+    const off = await setDamage(fx, { damageFeeEnabled: false });
+    expect(off.status).toBe(204);
+    const afterOff = await auth(request(server).get(`${base(fx.tenantId)}`), fx);
+    expect(afterOff.body.data.damageFeeEnabled).toBe(false);
+    expect(afterOff.body.data.damageFeeSevereAmount).toBe('400000');
+  });
+
+  it('saklar inspeksi mati menolak inspeksi baru sampai diaktifkan lagi', async () => {
+    const fx = await setupOrder('dmgoff');
+    const enabled = await setDamage(fx, { damageInspectionEnabled: false });
+    expect(enabled.status).toBe(204);
+
+    const blocked = await createInspectionFor(fx, { summary: 'Lecet halus' });
+    expect(blocked.status).toBe(422);
+    expect(blocked.body.error.code).toBe('BUSINESS_RULE_VIOLATION');
+
+    await setDamage(fx, { damageInspectionEnabled: true });
+    const allowed = await createInspectionFor(fx, { summary: 'Lecet halus' });
+    expect(allowed.status, JSON.stringify(allowed.body)).toBe(201);
+  });
+
+  it('mengusulkan denda dari tingkat kondisi dan menyimpan snapshot tenant', async () => {
+    const fx = await setupOrder('dmgsuggest');
+    await setDamage(fx, {
+      damageInspectionEnabled: true,
+      damageFeeEnabled: true,
+      damageFeeMinorAmount: 25_000,
+      damageFeeModerateAmount: 100_000,
+      damageFeeSevereAmount: 400_000,
+    });
+    const returnId = await completedReturn(fx);
+
+    const created = await createInspectionFor(fx, {
+      returnRecordId: returnId,
+      severity: 'SEVERE',
+      summary: 'Rangka bengkok',
+    });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    expect(created.body.data.severity).toBe('SEVERE');
+    expect(created.body.data.suggestedPenaltyAmount).toBe('400000');
+    expect(created.body.data.damageFee).toMatchObject({
+      enabled: true,
+      severity: 'SEVERE',
+      label: 'Parah',
+      amount: '400000',
+      amounts: { MINOR: '25000', MODERATE: '100000', SEVERE: '400000' },
+    });
+    // Usulan bukan keputusan: denda final belum ada sebelum diputuskan.
+    expect(created.body.data.penaltyAmount).toBeNull();
+
+    const inspectionId = created.body.data.id as string;
+    const snapshot = await prisma.withTenant(fx.tenantId, (tx) =>
+      tx.inspection.findUnique({ where: { id: inspectionId } }),
+    );
+    expect(snapshot!.damagePolicySnapshot).toEqual({
+      enabled: true,
+      amounts: { MINOR: '25000', MODERATE: '100000', SEVERE: '400000' },
+    });
+
+    // Owner mengganti nominal setelah inspeksi dibuat: usulan lama tidak boleh
+    // berubah karena inspeksi memakai snapshot-nya sendiri.
+    const changed = await setDamage(fx, { damageFeeSevereAmount: 900_000 });
+    expect(changed.status).toBe(204);
+
+    const reread = await auth(
+      request(server).get(`${base(fx.tenantId)}/inspections/${inspectionId}`),
+      fx,
+    );
+    expect(reread.body.data.suggestedPenaltyAmount).toBe('400000');
+    expect(reread.body.data.damageFee.amounts.SEVERE).toBe('400000');
+
+    // Pengajuan ulang dengan tingkat kondisi lebih ringan memakai snapshot,
+    // bukan nominal tenant yang baru.
+    const submitted = await auth(
+      request(server).patch(`${base(fx.tenantId)}/inspections/${inspectionId}/submit`),
+      fx,
+    ).send({ severity: 'MODERATE' });
+    expect(submitted.status, JSON.stringify(submitted.body)).toBe(200);
+    expect(submitted.body.data.severity).toBe('MODERATE');
+    expect(submitted.body.data.suggestedPenaltyAmount).toBe('100000');
+
+    const decided = await auth(
+      request(server).patch(`${base(fx.tenantId)}/inspections/${inspectionId}/decision`),
+      fx,
+    ).send({ decision: 'APPROVE', penaltyAmount: 150_000 });
+    expect(decided.status).toBe(200);
+    expect(decided.body.data.penaltyAmount).toBe('150000');
+    expect(decided.body.data.suggestedPenaltyAmount).toBe('100000');
+
+    const audits = await prisma.withTenant(fx.tenantId, (tx) =>
+      tx.auditLog.findMany({
+        where: { tenantId: fx.tenantId, action: 'INSPECTION_SUBMITTED' },
+      }),
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].metadata).toMatchObject({
+      severity: 'MODERATE',
+      suggestedPenaltyAmount: '100000',
+    });
+  });
+
+  it('saklar denda mati membuat usulan kosong walau tingkat kondisi diisi', async () => {
+    const fx = await setupOrder('dmgdisabled');
+    await setDamage(fx, {
+      damageFeeEnabled: false,
+      damageFeeSevereAmount: 400_000,
+    });
+
+    const created = await createInspectionFor(fx, { severity: 'SEVERE' });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    expect(created.body.data.severity).toBe('SEVERE');
+    expect(created.body.data.suggestedPenaltyAmount).toBeNull();
+    expect(created.body.data.damageFee.enabled).toBe(false);
+    expect(created.body.data.damageFee.amount).toBeNull();
+    // Nominal tetap terbaca supaya UI bisa menampilkan konfigurasi tersimpan.
+    expect(created.body.data.damageFee.amounts.SEVERE).toBe('400000');
+
+    const submitted = await auth(
+      request(server).patch(
+        `${base(fx.tenantId)}/inspections/${created.body.data.id}/submit`,
+      ),
+      fx,
+    ).send({ penaltyAmount: 0 });
+    expect(submitted.status).toBe(200);
+    expect(submitted.body.data.suggestedPenaltyAmount).toBeNull();
+  });
+
+  it('tingkat kondisi tidak dikenal ditolak dan inspeksi tanpa tingkat tidak berusulan', async () => {
+    const fx = await setupOrder('dmginvalid');
+    await setDamage(fx, {
+      damageFeeEnabled: true,
+      damageFeeMinorAmount: 25_000,
+    });
+
+    const invalid = await createInspectionFor(fx, { severity: 'BERAT' });
+    expect(invalid.status).toBe(400);
+
+    const plain = await createInspectionFor(fx, {});
+    expect(plain.status, JSON.stringify(plain.body)).toBe(201);
+    expect(plain.body.data.severity).toBeNull();
+    expect(plain.body.data.suggestedPenaltyAmount).toBeNull();
+    expect(plain.body.data.damageFee.label).toBeNull();
+  });
+});

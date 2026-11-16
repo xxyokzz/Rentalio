@@ -19,6 +19,13 @@ import {
  * Semua nilai uang adalah integer IDR rupiah utuh (bukan float).
  */
 
+/** Tingkat kerusakan — kunci nominal denda kondisi milik tenant. */
+export enum DamageSeverityDto {
+  MINOR = 'MINOR',
+  MODERATE = 'MODERATE',
+  SEVERE = 'SEVERE',
+}
+
 // ============================================================
 // Return
 // ============================================================
@@ -88,6 +95,13 @@ export class CreateInspectionDto {
   @IsString()
   @MaxLength(2000)
   summary?: string;
+
+  /** Tingkat kerusakan; menentukan usulan denda otomatis dari snapshot tenant. */
+  @IsOptional()
+  @IsEnum(DamageSeverityDto, {
+    message: 'Tingkat kerusakan harus MINOR, MODERATE, atau SEVERE.',
+  })
+  severity?: DamageSeverityDto;
 }
 
 export class SubmitInspectionDto {
@@ -101,6 +115,13 @@ export class SubmitInspectionDto {
   @IsInt()
   @Min(0)
   penaltyAmount?: number;
+
+  /** Tingkat kerusakan; mengubah usulan denda otomatis dari snapshot. */
+  @IsOptional()
+  @IsEnum(DamageSeverityDto, {
+    message: 'Tingkat kerusakan harus MINOR, MODERATE, atau SEVERE.',
+  })
+  severity?: DamageSeverityDto;
 }
 
 export enum InspectionDecisionDto {

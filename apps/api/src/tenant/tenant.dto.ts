@@ -114,6 +114,34 @@ export class UpdateTenantSettingsDto {
   @IsInt()
   @Min(0)
   lateFeeRateAmount?: number;
+
+  /** Saklar alur inspeksi kerusakan pasca-return (dokumen 15). */
+  @IsOptional()
+  @IsBoolean()
+  damageInspectionEnabled?: boolean;
+
+  /** Saklar usulan denda kondisi barang. */
+  @IsOptional()
+  @IsBoolean()
+  damageFeeEnabled?: boolean;
+
+  /** Nominal denda untuk kondisi ringan, IDR rupiah utuh. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  damageFeeMinorAmount?: number;
+
+  /** Nominal denda untuk kondisi sedang, IDR rupiah utuh. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  damageFeeModerateAmount?: number;
+
+  /** Nominal denda untuk kondisi parah, IDR rupiah utuh. */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  damageFeeSevereAmount?: number;
 }
 
 /** Enum role keanggotaan. */

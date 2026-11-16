@@ -42,6 +42,11 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
     lateFeeEnabled?: boolean;
     lateFeeUnit?: "DAY" | "HOUR";
     lateFeeRateAmount?: string;
+    damageInspectionEnabled?: boolean;
+    damageFeeEnabled?: boolean;
+    damageFeeMinorAmount?: string;
+    damageFeeModerateAmount?: string;
+    damageFeeSevereAmount?: string;
   }>({});
   const [busy, setBusy] = useState(false);
 
@@ -59,6 +64,21 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
   const lateFeeUnit = draft.lateFeeUnit ?? (tenant?.lateFeeUnit === "HOUR" ? "HOUR" : "DAY");
   const lateFeeRateAmount = draft.lateFeeRateAmount ?? tenant?.lateFeeRateAmount ?? "";
   const lateFeeRateInvalid = lateFeeEnabled && !(Number.parseInt(lateFeeRateAmount || "0", 10) > 0);
+  const damageInspectionEnabled =
+    draft.damageInspectionEnabled ?? tenant?.damageInspectionEnabled !== false;
+  const damageFeeEnabled = draft.damageFeeEnabled ?? tenant?.damageFeeEnabled === true;
+  const damageFeeMinorAmount = draft.damageFeeMinorAmount ?? tenant?.damageFeeMinorAmount ?? "";
+  const damageFeeModerateAmount =
+    draft.damageFeeModerateAmount ?? tenant?.damageFeeModerateAmount ?? "";
+  const damageFeeSevereAmount = draft.damageFeeSevereAmount ?? tenant?.damageFeeSevereAmount ?? "";
+  // Server menolak denda aktif tanpa nominal; UI hanya memberi peringatan awal.
+  const damageFeeAmounts = [
+    damageFeeMinorAmount,
+    damageFeeModerateAmount,
+    damageFeeSevereAmount,
+  ].map((value) => Number.parseInt(value || "0", 10));
+  const damageFeeInvalid =
+    damageFeeEnabled && (!damageInspectionEnabled || damageFeeAmounts.every((amount) => amount <= 0));
 
   const setBookingMode = (next: "MANUAL" | "AUTOMATIC") =>
     setDraft((current) => ({ ...current, bookingMode: next }));
@@ -110,6 +130,11 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
         lateFeeUnit,
         // Server menolak tarif 0 saat denda aktif; klien tidak mengarang nilai.
         lateFeeRateAmount: Number.parseInt(lateFeeRateAmount || "0", 10),
+        damageInspectionEnabled,
+        damageFeeEnabled,
+        damageFeeMinorAmount: Number.parseInt(damageFeeMinorAmount || "0", 10),
+        damageFeeModerateAmount: Number.parseInt(damageFeeModerateAmount || "0", 10),
+        damageFeeSevereAmount: Number.parseInt(damageFeeSevereAmount || "0", 10),
       });
       await refresh();
       setDraft({});
@@ -438,6 +463,83 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
                 <p className="text-xs text-muted">
                   Denda yang dihitung server menjadi usulan pada inspeksi pengembalian; nominal akhirnya
                   tetap diputuskan petugas berizin dan tidak otomatis menambah tagihan pesanan.
+                </p>
+              </div>
+            </PanelBody>
+          </Panel>
+
+          <Panel>
+            <PanelHead
+              title="Inspeksi & denda kerusakan"
+              description="Nominal per tingkat kondisi dipakai sebagai usulan otomatis saat inspeksi dibuat."
+            />
+            <PanelBody>
+              <div className="stack">
+                <CheckboxField
+                  label="Aktifkan inspeksi kerusakan"
+                  checked={damageInspectionEnabled}
+                  onChange={(next) =>
+                    setDraft((current) => ({ ...current, damageInspectionEnabled: next }))
+                  }
+                  hint="Bila nonaktif, pencatatan pengembalian tetap berjalan tetapi inspeksi baru ditolak."
+                />
+                <CheckboxField
+                  label="Aktifkan denda kerusakan"
+                  checked={damageFeeEnabled}
+                  disabled={!damageInspectionEnabled}
+                  onChange={(next) =>
+                    setDraft((current) => ({ ...current, damageFeeEnabled: next }))
+                  }
+                  hint="Bila nonaktif, usulan denda kondisi selalu kosong tetapi nominal tersimpan tidak dihapus."
+                />
+                <div className="form-grid">
+                  <TextInput
+                    label="Denda kondisi ringan (Rp)"
+                    inputMode="numeric"
+                    value={damageFeeMinorAmount}
+                    disabled={!damageFeeEnabled}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        damageFeeMinorAmount: event.target.value.replace(/\D/g, ""),
+                      }))
+                    }
+                  />
+                  <TextInput
+                    label="Denda kondisi sedang (Rp)"
+                    inputMode="numeric"
+                    value={damageFeeModerateAmount}
+                    disabled={!damageFeeEnabled}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        damageFeeModerateAmount: event.target.value.replace(/\D/g, ""),
+                      }))
+                    }
+                  />
+                  <TextInput
+                    label="Denda kondisi parah (Rp)"
+                    inputMode="numeric"
+                    value={damageFeeSevereAmount}
+                    disabled={!damageFeeEnabled}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        damageFeeSevereAmount: event.target.value.replace(/\D/g, ""),
+                      }))
+                    }
+                  />
+                </div>
+                {damageFeeInvalid ? (
+                  <InlineAlert tone="warning">
+                    Isi minimal satu nominal lebih dari Rp0 dan aktifkan inspeksi sebelum denda kondisi
+                    dapat disimpan.
+                  </InlineAlert>
+                ) : null}
+                <p className="text-xs text-muted">
+                  Nominal disalin ke snapshot inspeksi saat inspeksi dibuat, sehingga perubahan setelahnya
+                  tidak mengubah usulan inspeksi yang sedang berjalan. Usulan tidak otomatis menagih atau
+                  memotong deposit.
                 </p>
               </div>
             </PanelBody>
