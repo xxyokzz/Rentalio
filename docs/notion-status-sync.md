@@ -1,4 +1,4 @@
-# Sinkronisasi status Notion ↔ kode — 27–29 Oktober 2026
+# Sinkronisasi status Notion ↔ kode — 27 Oktober – 16 November 2026
 
 Dokumen kerja hasil pemeriksaan ulang seluruh dokumentasi Notion proyek Rentalio
 terhadap kondisi kode di workspace ini. Sumber spec: dokumen Notion 04, 06, 07,
@@ -41,6 +41,12 @@ yang sudah terbukti jalan lokal dan mana yang belum dikerjakan.
 > Ditambah pengingat tagihan ke operator (job worker + 4 unit test penyusun
 > pesan dan 5 test integrasi idempotensi/retry) karena QRIS tidak memberi
 > callback pembayaran.
+>
+> 16 November 2026: suite penuh dijalankan ulang lewat CI pada commit `2875108`
+> — `apps/api` **42 file / 517 test** dan `apps/web` **20 file / 137 test**
+> lulus, `pnpm openapi:validate` melaporkan 113 path / 140 operasi, dan migrasi
+> dari database kosong kini **34 migrasi**. Angka pada tabel di atas adalah
+> hasil audit 31 Okt–2 Nov dan sengaja dibiarkan sebagai riwayat.
 
 Satu endpoint yang secara resmi masih `x-implementation-status: future`:
 `POST /tenants/{tenantId}/inspections/{inspectionId}/attachments`.
@@ -267,6 +273,70 @@ center, dan promo **belum** termasuk.
   Diuji 6 test integrasi (401 tanpa sesi, profil + membership, CRUD + pencarian
   + paginasi, duplikat 422, isolasi lintas tenant, CASHIER baca saja + CSRF).
 
+## Pembaruan 16 November 2026 — inspeksi kerusakan & denda kondisi (dokumen 15)
+
+Butir “pemeriksaan kerusakan & denda” pada daftar *Belum ada sama sekali*
+sudah tidak berlaku. Inspeksi pasca-return kini punya saklar sendiri dan denda
+kondisi yang bisa diatur owner, mengikuti pola denda keterlambatan
+(commit `2875108`). Ruang lingkupnya: pengaturan + usulan otomatis, **bukan**
+penagihan otomatis.
+
+- **Pengaturan tenant** (`GET`/`PATCH /tenants/{tenantId}`).
+  `damageInspectionEnabled` (default `true`, supaya alur serah-terima yang
+  sudah berjalan tidak berubah), `damageFeeEnabled` (default `false`), dan
+  nominal per tingkat kondisi `damageFeeMinorAmount` (ringan),
+  `damageFeeModerateAmount` (sedang), `damageFeeSevereAmount` (parah) — IDR
+  rupiah utuh dengan CHECK non-negatif. Migrasi
+  `20261116090000_tenant_damage_fee` menambah enum `DamageSeverity`
+  (`MINOR`/`MODERATE`/`SEVERE`), lima kolom tenant, dan tiga kolom inspeksi.
+- **Validasi server.** Menyalakan denda kondisi ditolak `400
+  VALIDATION_ERROR` bila inspeksi belum aktif atau ketiga nominal masih nol;
+  nominal negatif ditolak validasi DTO. Mematikan saklar tidak menghapus
+  nominal tersimpan.
+- **Saklar inspeksi.** `POST /orders/{orderId}/inspections` menjawab `422
+  BUSINESS_RULE_VIOLATION` saat `damageInspectionEnabled` mati; pencatatan
+  pengembalian tetap berjalan.
+- **Snapshot.** Konfigurasi denda disalin ke `inspections.damagePolicySnapshot`
+  (JSONB) saat inspeksi dibuat. Mengubah nominal setelahnya tidak menulis
+  ulang inspeksi yang berjalan: `submit` menghitung usulan dari snapshot, bukan
+  dari konfigurasi tenant terkini. Snapshot lama/rusak dibaca sebagai kebijakan
+  nonaktif, bukan error.
+- **Usulan denda otomatis.** `POST .../inspections` dan `PATCH
+  .../inspections/{id}/submit` menerima `severity`; server mengisi
+  `suggestedPenaltyAmount` dan objek `damageFee` (`enabled`, `severity`,
+  `label`, `amount`, `amounts`). Usulan tetap terpisah dari `penaltyAmount`:
+  keputusan `APPROVE` masih wajib menyebut nominal final, tidak menagih
+  otomatis, dan tidak memotong deposit. Audit `INSPECTION_CREATED` dan
+  `INSPECTION_SUBMITTED` mencatat `severity` + `suggestedPenaltyAmount`.
+- **Kontrak & UI.** `docs/openapi.yaml` menambah field tenant, request
+  `severity`, `suggestedPenaltyAmount`, dan skema `DamageFeeResponse`;
+  `types.generated.ts` diregenerasi. Pengaturan usaha mendapat panel “Inspeksi &
+  denda kerusakan” (dua saklar + tiga nominal), dan panel pengembalian
+  menampilkan tingkat kondisi, usulan, serta prefill dialog pengajuan.
+
+### Bukti eksekusi fitur ini
+
+| Perintah / bukti | Hasil |
+| --- | --- |
+| `pnpm --filter @rentalio/api exec vitest run test/unit/damage-fee.test.ts test/unit/late-fee.test.ts test/integration/returns.integration.test.ts` | **45 lulus** (3 file): 8 unit `damage-fee` (baru), 6 unit `late-fee`, 31 integrasi `returns` (26 lama + 5 baru) |
+| `pnpm --filter @rentalio/api typecheck` / `@rentalio/web` / `@rentalio/admin` / `@rentalio/database` | lulus |
+| `pnpm openapi:validate` | lulus — OpenAPI 3.1.1, **113 path / 140 operasi**, skema 3.1 valid |
+| `pnpm --filter @rentalio/web openapi:types` | `types.generated.ts` diperbarui dari kontrak |
+| CI GitHub Actions run `43899349779` (push `main`, commit `2875108`) | **success** — actionlint, validasi OpenAPI, typecheck, lint, build, unit+integration (`apps/api` **42 file / 517 test**), e2e Playwright desktop, `apps/web` **20 file / 137 test** |
+| migrasi dari database kosong (global setup test) | **34 migrasi** terpasang berurutan, termasuk `20261116090000_tenant_damage_fee` |
+
+Lima test integrasi baru: konfigurasi invalid (tanpa inspeksi / semua nol /
+negatif → 400, simpan sukses, nominal tetap ada saat dimatikan), inspeksi
+ditolak saat saklar mati lalu diterima setelah diaktifkan, usulan dari
+`severity` + snapshot beku saat nominal diubah, usulan kosong saat denda
+nonaktif, dan `severity` tak dikenal → 400 sementara inspeksi tanpa `severity`
+tetap berjalan tanpa usulan.
+
+**Belum termasuk:** `POST /tenants/{tenantId}/inspections/{inspectionId}/attachments`
+(lampiran foto) masih `x-implementation-status: future`, dan tidak ada test web
+baru untuk panel pengaturan/inspeksi — UI hanya terbukti lewat `typecheck` dan
+e2e desktop yang sudah ada.
+
 ## Yang dinyatakan sudah dikerjakan (dan dicentang di Notion)
 
 - **Dokumen 04** — acceptance checklist OpenAPI final (dokumen, enum/transisi
@@ -308,28 +378,31 @@ center, dan promo **belum** termasuk.
    [`docs/admin-platform-backlog.md`](./admin-platform-backlog.md).
 3. **Manajemen domain kustom** — `GET/POST /tenants/:id/domains`,
    `POST /domains/:id/verify`, status domain, instruksi DNS, TLS.
-4. **Pemeriksaan kerusakan & denda (dokumen 15)** — `damage_inspection_enabled`,
-   `damage_fee_enabled`, nominal Ringan/Sedang/Parah, tingkat kondisi, snapshot
-   order, usulan denda otomatis.
-5. **Laporan/invoice/ekspor/impor** — `/reports/finance`, `/reports/operations`,
+4. **Laporan/invoice/ekspor/impor** — `/reports/finance`, `/reports/operations`,
    `/invoices`, `/reports/exports`, `/inventory/imports`.
-6. **Kontrak & akun** — sisa kelompok ini: `POST /contracts/:id/accept`,
+5. **Kontrak & akun** — sisa kelompok ini: `POST /contracts/:id/accept`,
    aksi akun lanjutan (ubah profil/kata sandi), `GET /calendar`, dan
    `POST /orders/:id/penalties`. `GET /me`, `GET/POST /customers`, dan
    `POST /portal/orders/{token}/extensions` sudah ada (pembaruan 29 Okt 2026).
-7. **Media produk & branding** — metadata gambar, publikasi eksplisit,
+6. **Media produk & branding** — metadata gambar, publikasi eksplisit,
    penyambungan ke storefront, dan presigned **download**.
-8. **Katalog editor/template (WEB-07)** — fondasi konfigurasi sudah ada
+7. **Katalog editor/template (WEB-07)** — fondasi konfigurasi sudah ada
    (migrasi 22: tema/branding/blok, `DRAFT`/`PUBLISHED`/`ARCHIVED`,
    draft/publish/rollback teruji), tetapi galeri template, preview
    desktop/mobile, validasi sebelum publish, dan publikasi eksplisit ke
    storefront belum selesai.
-9. **Lampiran inspeksi** — `POST /inspections/{id}/attachments` (satu-satunya
+8. **Lampiran inspeksi** — `POST /inspections/{id}/attachments` (satu-satunya
    endpoint `future` di kontrak).
 
    > Catatan 28 Okt 2026: **`duplicate` template WhatsApp tidak lagi termasuk
    > daftar ini** — endpoint + test-nya sudah ada (lihat §Pembaruan 28 Oktober
    > 2026).
+   >
+   > Catatan 16 Nov 2026: **pemeriksaan kerusakan & denda kondisi tidak lagi
+   > termasuk daftar ini** — saklar inspeksi/denda, nominal ringan/sedang/parah,
+   > snapshot konfigurasi, dan usulan denda otomatis sudah ada beserta test-nya
+   > (lihat §Pembaruan 16 November 2026). Lampiran inspeksi (butir 8) tetap
+   > terbuka.
 
 ### Sebagian, belum boleh ditandai selesai
 
