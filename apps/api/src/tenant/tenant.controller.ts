@@ -99,6 +99,23 @@ export class TenantController {
     return { data: await this.tenantService.listDamageFeeRevisions(id, this.requireSession(req)) };
   }
 
+  @Post(':id/damage-fee-revisions/:revisionId/restore')
+  @HttpCode(200)
+  @UseGuards(CsrfGuard)
+  @ApiOperation({ summary: 'Kembalikan kebijakan denda ke revisi lama (OWNER)' })
+  async restoreDamageFeeRevision(
+    @Param('id') id: string,
+    @Param('revisionId') revisionId: string,
+    @Req() req: AuthedRequest,
+  ) {
+    return {
+      data: await this.tenantService.restoreDamageFeeRevision(id, revisionId, {
+        actorUserId: this.requireSession(req),
+        correlationId: req.correlationId,
+      }),
+    };
+  }
+
   @Get(':id/damage-fee-categories')
   @ApiOperation({ summary: 'Nominal denda kondisi khusus per kategori produk' })
   async listDamageFeeCategoryAmounts(

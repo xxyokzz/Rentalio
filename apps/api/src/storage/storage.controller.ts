@@ -1,16 +1,18 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Request } from 'express';
 import { StorageService } from './storage.service.js';
-import { RequestUploadUrlDto } from './storage.dto.js';
+import { RequestDownloadUrlDto, RequestUploadUrlDto, StorageUploadCategory } from './storage.dto.js';
 import { TenantService } from '../tenant/tenant.service.js';
 import { SessionGuard, CsrfGuard } from '../auth/auth.guards.js';
 import { SubscriptionGuard } from '../subscriptions/subscription.guard.js';
@@ -21,6 +23,13 @@ import type { SessionInfo } from '../auth/auth.service.js';
 interface AuthedRequest extends Request {
   session?: SessionInfo;
 }
+
+const INSPECTION_MIME_TYPES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'application/pdf',
+]);
 
 @ApiTags('storage')
 @Controller('tenants/:tenantId/storage')
@@ -49,6 +58,16 @@ export class StorageController {
       'STAFF',
     ]);
 
+    if (
+      body.category === StorageUploadCategory.INSPECTIONS &&
+      !INSPECTION_MIME_TYPES.has(body.contentType)
+    ) {
+      throw new ApiError(
+        ErrorCode.VALIDATION_ERROR,
+        'Lampiran inspeksi hanya JPEG, PNG, WebP, atau PDF.',
+      );
+    }
+
     const result = await this.storageService.createTenantUploadUrl(
       tenantId,
       body.category,
@@ -57,6 +76,37 @@ export class StorageController {
     );
 
     return { data: result };
+  }
+
+  @Get('download-url')
+  @ApiOperation({ summary: 'Minta presigned URL unduh berumur pendek untuk objek tenant' })
+  async requestDownloadUrl(
+    @Param('tenantId') tenantId: string,
+    @Query() query: RequestDownloadUrlDto,
+    @Req() req: AuthedRequest,
+  ) {
+    await this.tenantService.requireMembership(tenantId, this.uid(req), [
+      'OWNER',
+      'MANAGER',
+      'STAFF',
+      'CASHIER',
+    ]);
+
+    // Objek tenant lain tidak boleh bisa ditandatangani, meski kuncinya ditebak.
+    if (!query.objectKey.startsWith(`tenants/${tenantId}/`)) {
+      throw new ApiError(
+        ErrorCode.VALIDATION_ERROR,
+        'objectKey harus berada di namespace tenant aktif.',
+      );
+    }
+
+    return {
+      data: {
+        objectKey: query.objectKey,
+        downloadUrl: await this.storageService.createDownloadUrl(query.objectKey),
+        expiresInSeconds: 300,
+      },
+    };
   }
 
   private uid(req: AuthedRequest): string {

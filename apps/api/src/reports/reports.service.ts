@@ -34,14 +34,18 @@ export class ReportsService {
     return this.prisma.withTenant(tenantId, async (tx) => {
       const [
         penaltyAggregate,
+        voidedPenalties,
         inspectionGroups,
         itemGroups,
         topProducts,
       ] = await Promise.all([
         tx.orderPenalty.aggregate({
-          where: { tenantId, ...(createdAt ? { createdAt } : {}) },
+          where: { tenantId, status: 'RECORDED', ...(createdAt ? { createdAt } : {}) },
           _count: { _all: true },
           _sum: { amount: true },
+        }),
+        tx.orderPenalty.count({
+          where: { tenantId, status: 'VOIDED', ...(createdAt ? { createdAt } : {}) },
         }),
         tx.inspection.groupBy({
           by: ['status'],
@@ -69,6 +73,7 @@ export class ReportsService {
         SUBMITTED: 0,
         APPROVED: 0,
         REJECTED: 0,
+        DISPUTED: 0,
       };
       for (const group of inspectionGroups) {
         inspections[group.status] = group._count._all;
@@ -88,6 +93,16 @@ export class ReportsService {
         };
       }
 
+      // Nama produk diambil terpisah: `inspection_items` hanya menyimpan id.
+      const productIds = topProducts.map((row) => row.productId);
+      const products = productIds.length
+        ? await tx.product.findMany({
+            where: { tenantId, id: { in: productIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+      const productNames = new Map(products.map((product) => [product.id, product.name]));
+
       return {
         range: {
           from: from ? from.toISOString() : null,
@@ -96,11 +111,13 @@ export class ReportsService {
         penalties: {
           count: penaltyAggregate._count._all,
           totalAmount: (penaltyAggregate._sum.amount ?? 0n).toString(),
+          voidedCount: voidedPenalties,
         },
         inspections,
         severity,
         topProducts: topProducts.map((row) => ({
           productId: row.productId,
+          productName: productNames.get(row.productId) ?? null,
           lines: row._count._all,
           quantity: row._sum.quantity ?? 0,
           suggestedAmount: (row._sum.suggestedAmount ?? 0n).toString(),

@@ -101,6 +101,12 @@ export const tenantApi = {
       `/tenants/${tenantId}/damage-fee-revisions`,
     ),
 
+  restoreDamageFeeRevision: (tenantId: string, revisionId: string) =>
+    apiRequest<Schema<"DamageFeeRevisionResponse">>(
+      `/tenants/${tenantId}/damage-fee-revisions/${revisionId}/restore`,
+      { method: "POST" },
+    ),
+
   listDamageFeeCategories: (tenantId: string) =>
     apiRequest<Schema<"DamageFeeCategoryAmountResponse">[]>(
       `/tenants/${tenantId}/damage-fee-categories`,
@@ -199,6 +205,16 @@ export const portalApi = {
     apiRequest<Schema<"PortalOrderResponse">>(
       `/portal/orders/${encodeURIComponent(token)}`,
       { csrf: false },
+    ),
+
+  disputeInspection: (
+    token: string,
+    inspectionId: string,
+    body: Schema<"PortalInspectionDisputeRequest">,
+  ) =>
+    apiRequest<Schema<"PortalInspectionDisputeResult">>(
+      `/portal/orders/${encodeURIComponent(token)}/inspections/${inspectionId}/dispute`,
+      { method: "POST", body, csrf: false },
     ),
 
   requestExtension: (token: string, body: Schema<"PortalExtensionRequest">) =>
@@ -437,6 +453,13 @@ export const orderApi = {
       { method: "POST", body },
     ),
 
+  /** Batalkan denda yang salah tagih; baris tetap ada sebagai riwayat. */
+  voidPenalty: (tenantId: string, orderId: string, penaltyId: string, reason: string) =>
+    apiRequest<Schema<"OrderPenaltyResponse">>(
+      `/tenants/${tenantId}/orders/${orderId}/penalties/${penaltyId}/void`,
+      { method: "POST", body: { reason } },
+    ),
+
   getDeposit: (tenantId: string, orderId: string) =>
     apiRequest<Schema<"DepositResponse">>(`/tenants/${tenantId}/orders/${orderId}/deposits`),
 
@@ -658,6 +681,41 @@ export const inspectionApi = {
   whatsappMessage: (tenantId: string, inspectionId: string) =>
     apiRequest<Schema<"InspectionWhatsAppMessageResponse">>(
       `/tenants/${tenantId}/inspections/${inspectionId}/whatsapp-message`,
+    ),
+
+  /** Putuskan ulang sengketa penyewa (UPHELD/REVISED). */
+  resolveDispute: (
+    tenantId: string,
+    inspectionId: string,
+    body: Schema<"ResolveInspectionDisputeRequest">,
+  ) =>
+    apiRequest<Schema<"InspectionResponse">>(
+      `/tenants/${tenantId}/inspections/${inspectionId}/dispute/resolve`,
+      { method: "POST", body },
+    ),
+
+  addAttachment: (
+    tenantId: string,
+    inspectionId: string,
+    body: Schema<"CreateInspectionAttachmentRequest">,
+  ) =>
+    apiRequest<Schema<"InspectionResponse">>(
+      `/tenants/${tenantId}/inspections/${inspectionId}/attachments`,
+      { method: "POST", body },
+    ),
+};
+
+/** Upload/unduh objek privat lewat presigned URL; kunci dibuat server. */
+export const storageApi = {
+  uploadUrl: (tenantId: string, body: Schema<"RequestStorageUploadUrl">) =>
+    apiRequest<Schema<"StorageUploadUrlResponse">>(
+      `/tenants/${tenantId}/storage/upload-url`,
+      { method: "POST", body },
+    ),
+
+  downloadUrl: (tenantId: string, objectKey: string) =>
+    apiRequest<Schema<"StorageDownloadUrlResponse">>(
+      `/tenants/${tenantId}/storage/download-url${qs({ objectKey })}`,
     ),
 };
 

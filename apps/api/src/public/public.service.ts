@@ -9,7 +9,11 @@ import { RateLimitService, PUBLIC_RATE_LIMITS } from '../rate-limit/rate-limit.s
 import { AuditService } from '../audit/audit.service.js';
 import { ApiError, ErrorCode } from '../common/errors.js';
 import { hashToken, randomToken } from '../common/crypto.js';
-import type { CreatePublicBookingDto, PortalExtensionRequestDto } from './public.dto.js';
+import type {
+  CreatePublicBookingDto,
+  PortalExtensionRequestDto,
+  PortalInspectionDisputeDto,
+} from './public.dto.js';
 
 /** UUID tenant tidak pernah dikirim ke publik; slug adalah identitas publik. */
 export interface PublicTenant {
@@ -318,6 +322,19 @@ export class PublicService {
           })
         : [];
 
+      // Hasil inspeksi terakhir yang relevan ke penyewa: hanya keputusan final
+      // (APPROVED) atau sengketa berjalan (DISPUTED). Draft tidak pernah tampil.
+      const inspection = order
+        ? await tx.inspection.findFirst({
+            where: {
+              tenantId: tenant.id,
+              orderId: order.id,
+              status: { in: ['APPROVED', 'DISPUTED'] },
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        : null;
+
       const settings = await tx.tenantPaymentMethodSetting.findMany({
         where: { tenantId: tenant.id, context: 'NEW_BOOKING' },
       });
@@ -369,6 +386,17 @@ export class PublicService {
           paidAmount: money(paidAmount),
           outstandingAmount: money(orderTotal - paidAmount > 0n ? orderTotal - paidAmount : 0n),
         },
+        inspection: inspection
+          ? {
+              id: inspection.id,
+              status: inspection.status,
+              penaltyAmount: money(inspection.penaltyAmount ?? 0n),
+              summary: inspection.summary,
+              disputeReason: inspection.disputeReason,
+              disputedAt: inspection.disputedAt,
+              canDispute: inspection.status === 'APPROVED',
+            }
+          : null,
         paymentMethods,
         extensionsEnabled: tenant.rentalExtensionEnabled,
         extensions: extensions.map((extension) => ({
@@ -383,6 +411,95 @@ export class PublicService {
           decisionReason: extension.decisionReason,
         })),
         portalExpiresAt: access.expiresAt,
+      };
+    });
+  }
+
+  /**
+   * Penyewa menyanggah hasil inspeksi lewat tautan pesanan.
+   *
+   * Hanya inspeksi APPROVED yang bisa disanggah; permintaan ulang idempoten.
+   * Denda yang belum/tidak ditagihkan tetap tidak berubah — keputusan ulang
+   * (UPHELD/REVISED) dilakukan owner/manager di aplikasi internal.
+   */
+  async disputePortalInspection(
+    token: string,
+    inspectionId: string,
+    dto: PortalInspectionDisputeDto,
+    ctx: { ip: string; correlationId: string },
+  ) {
+    await this.consume(PUBLIC_RATE_LIMITS.portalIp, ctx.ip);
+    if (!/^[A-Za-z0-9_-]{20,128}$/.test(token)) {
+      throw new ApiError(ErrorCode.NOT_FOUND, 'Tautan pesanan tidak valid atau sudah kedaluwarsa.');
+    }
+    const tokenHash = hashToken(token);
+
+    return this.prisma.withPortalToken(tokenHash, async (tx) => {
+      const access = await tx.publicOrderAccess.findUnique({ where: { tokenHash } });
+      if (!access || access.revokedAt || access.expiresAt.getTime() <= Date.now()) {
+        throw new ApiError(ErrorCode.NOT_FOUND, 'Tautan pesanan tidak valid atau sudah kedaluwarsa.');
+      }
+      await this.prisma.setTenant(access.tenantId, tx);
+      const tenant = await tx.tenant.findUnique({ where: { id: access.tenantId } });
+      if (!tenant || tenant.status !== 'ACTIVE') {
+        throw new ApiError(ErrorCode.NOT_FOUND, 'Tautan pesanan tidak valid atau sudah kedaluwarsa.');
+      }
+
+      const order = await tx.rentalOrder.findFirst({
+        where: { tenantId: tenant.id, sourceReservationId: access.reservationId },
+      });
+      const inspection = await tx.inspection.findUnique({
+        where: { tenantId_id: { tenantId: tenant.id, id: inspectionId } },
+      });
+      if (!order || !inspection || inspection.orderId !== order.id) {
+        throw new ApiError(ErrorCode.NOT_FOUND, 'Inspeksi tidak ditemukan pada pesanan ini.');
+      }
+      if (inspection.status === 'DISPUTED') {
+        return {
+          status: inspection.status,
+          disputedAt: inspection.disputedAt,
+          reason: inspection.disputeReason,
+        };
+      }
+      if (inspection.status !== 'APPROVED') {
+        throw new ApiError(
+          ErrorCode.INVALID_STATE_TRANSITION,
+          'Hanya hasil inspeksi yang sudah disetujui dapat disanggah.',
+        );
+      }
+
+      const updated = await tx.inspection.update({
+        where: { tenantId_id: { tenantId: tenant.id, id: inspectionId } },
+        data: {
+          status: 'DISPUTED',
+          disputeReason: dto.reason.trim(),
+          disputedAt: new Date(),
+          disputeResolution: null,
+          disputeResolvedAt: null,
+        },
+      });
+
+      await this.audit.record(
+        {
+          tenantId: tenant.id,
+          actorUserId: null,
+          action: 'INSPECTION_DISPUTED',
+          domain: 'returns',
+          entityType: 'inspection',
+          entityId: inspectionId,
+          fromState: 'APPROVED',
+          toState: 'DISPUTED',
+          correlationId: ctx.correlationId,
+          reason: updated.disputeReason ?? undefined,
+          metadata: { orderId: order.id },
+        },
+        tx,
+      );
+
+      return {
+        status: updated.status,
+        disputedAt: updated.disputedAt,
+        reason: updated.disputeReason,
       };
     });
   }

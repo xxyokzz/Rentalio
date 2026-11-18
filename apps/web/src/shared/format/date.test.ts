@@ -4,8 +4,25 @@ import {
   formatDateRange,
   isoToZonedDate,
   isoToZonedLocal,
+  zonedDateEndIso,
+  zonedDateStartIso,
   zonedLocalToIso,
 } from "./date";
+
+describe("batas hari laporan pada zona tenant", () => {
+  it("memakai tengah malam waktu toko, bukan UTC", () => {
+    // 18 Nov 2026 00:00 WIB = 17 Nov 17:00 UTC
+    expect(zonedDateStartIso("2026-11-18", "Asia/Jakarta")).toBe("2026-11-17T17:00:00.000Z");
+    // Akhir hari = awal 19 Nov WIB minus 1 ms
+    expect(zonedDateEndIso("2026-11-18", "Asia/Jakarta")).toBe("2026-11-18T16:59:59.999Z");
+  });
+
+  it("menangani zona dengan offset berbeda dan input tidak valid", () => {
+    expect(zonedDateStartIso("2026-11-18", "Asia/Makassar")).toBe("2026-11-17T16:00:00.000Z");
+    expect(zonedDateStartIso("18/11/2026", "Asia/Jakarta")).toBeNull();
+    expect(zonedDateEndIso("bukan-tanggal", "Asia/Jakarta")).toBeNull();
+  });
+});
 
 describe("zonedLocalToIso", () => {
   it("menafsirkan waktu lokal sebagai zona waktu tenant", () => {

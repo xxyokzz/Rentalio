@@ -26,15 +26,18 @@ vi.mock("@/shared/auth/session", () => ({
   }),
 }));
 
-vi.mock("@/shared/ui/overlays", () => ({
-  useToast: () => ({ notify: mocks.notify }),
-}));
+vi.mock("@/shared/ui/overlays", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/shared/ui/overlays")>();
+  return { ...actual, useToast: () => ({ notify: mocks.notify }) };
+});
 
 vi.mock("@/shared/api/endpoints", () => ({
   tenantApi: {
     updateSettings: mocks.updateSettings,
     listDamageFeeCategories: mocks.listDamageFeeCategories,
     upsertDamageFeeCategory: mocks.upsertDamageFeeCategory,
+    listDamageFeeRevisions: vi.fn(async () => []),
+    restoreDamageFeeRevision: vi.fn(),
   },
   billingApi: { listInvoices: mocks.listInvoices, createInvoice: mocks.createInvoice },
   catalogApi: { listCategories: mocks.listCategories },

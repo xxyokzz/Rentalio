@@ -19,6 +19,7 @@ import { ConfirmDialog, Dialog, useToast } from "@/shared/ui/overlays";
 import { Panel, PanelHead, StatusBadge } from "@/shared/ui/surfaces";
 import { EmptyState, InlineAlert } from "@/shared/ui/states";
 import { itemLabel } from "./item-label";
+import { InspectionAttachmentsDialog } from "./inspection-attachments";
 
 type Order = Schema<"OrderResponse">;
 type ReturnRecord = Schema<"ReturnRecordResponse">;
@@ -45,6 +46,8 @@ export function ReturnsPanel({
   const canReturn = can(role as Role | undefined, "order.return");
   const canInspect = can(role as Role | undefined, "order.inspect");
   const canDeduct = can(role as Role | undefined, "deposit.deduct");
+  // Keputusan sengketa mengikuti aturan server: hanya OWNER/MANAGER.
+  const canResolveDispute = role === "OWNER" || role === "MANAGER";
 
   const [createOpen, setCreateOpen] = useState(false);
   const [inspectionOpen, setInspectionOpen] = useState(false);
@@ -52,6 +55,8 @@ export function ReturnsPanel({
   const [cancelling, setCancelling] = useState<ReturnRecord | null>(null);
   const [submitting, setSubmitting] = useState<Inspection | null>(null);
   const [deciding, setDeciding] = useState<Inspection | null>(null);
+  const [attaching, setAttaching] = useState<Inspection | null>(null);
+  const [resolvingDispute, setResolvingDispute] = useState<Inspection | null>(null);
   const [penalizing, setPenalizing] = useState<Inspection | null>(null);
   const [deducting, setDeducting] = useState<Inspection | null>(null);
   const [busy, setBusy] = useState(false);
@@ -258,6 +263,18 @@ export function ReturnsPanel({
                             Putuskan
                           </Button>
                         ) : null}
+                        {inspection.status === "DISPUTED" && canResolveDispute ? (
+                          <Button
+                            size="sm"
+                            variant="primary"
+                            onClick={() => setResolvingDispute(inspection)}
+                          >
+                            Selesaikan sengketa
+                          </Button>
+                        ) : null}
+                        <Button size="sm" variant="ghost" onClick={() => setAttaching(inspection)}>
+                          Lampiran ({(inspection.attachments ?? []).length})
+                        </Button>
                         {inspection.status !== "DRAFT" ? (
                           <Button
                             size="sm"
@@ -450,6 +467,28 @@ export function ReturnsPanel({
           Nominal: {formatIDR(deducting?.penaltyAmount)} — harus sama dengan denda inspeksi.
         </p>
       </ConfirmDialog>
+
+      <ResolveDisputeDialog
+        key={resolvingDispute?.id ?? "dispute-dialog"}
+        inspection={resolvingDispute}
+        tenantId={tenantId}
+        onClose={() => setResolvingDispute(null)}
+        onSaved={() => {
+          notify("Sengketa diputuskan ulang.", "success");
+          setResolvingDispute(null);
+          onChanged();
+        }}
+        onError={(message) => notify(message, "error")}
+      />
+
+      <InspectionAttachmentsDialog
+        key={attaching?.id ?? "attachments-dialog"}
+        open={Boolean(attaching)}
+        onClose={() => setAttaching(null)}
+        tenantId={tenantId}
+        inspection={attaching}
+        onChanged={onChanged}
+      />
 
       <DecideInspectionDialog
         key={deciding?.id ?? "decision-dialog"}
@@ -815,6 +854,90 @@ function SubmitInspectionDialog({
               : "Kondisi aman tetap Rp0. Denda tidak otomatis dipotong dari deposit."
           }
         />
+      </form>
+    </Dialog>
+  );
+}
+
+function ResolveDisputeDialog({
+  inspection,
+  tenantId,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  inspection: Inspection | null;
+  tenantId: string;
+  onClose: () => void;
+  onSaved: () => void;
+  onError: (message: string) => void;
+}) {
+  const [decision, setDecision] = useState<"UPHELD" | "REVISED">("UPHELD");
+  const [penalty, setPenalty] = useState(inspection?.penaltyAmount ?? "");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!inspection?.id) return;
+    if (decision === "REVISED" && !penalty) {
+      onError("Nominal baru wajib diisi saat mengubah keputusan.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await inspectionApi.resolveDispute(tenantId, inspection.id, {
+        decision,
+        penaltyAmount: decision === "REVISED" ? Number.parseInt(penalty, 10) : undefined,
+        note: note.trim() || undefined,
+      });
+      onSaved();
+    } catch (caught) {
+      onError(describeApiError(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog
+      open={Boolean(inspection)}
+      onClose={onClose}
+      title="Selesaikan sengketa inspeksi"
+      description="Penyewa menyanggah keputusan. Denda tidak bisa ditagihkan selama statusnya sengketa."
+      footer={
+        <>
+          <Button onClick={onClose} disabled={busy}>
+            Batal
+          </Button>
+          <Button type="submit" form="resolve-dispute" variant="primary" loading={busy}>
+            Simpan keputusan
+          </Button>
+        </>
+      }
+    >
+      <form id="resolve-dispute" className="stack" onSubmit={submit}>
+        <InlineAlert tone="warning">
+          Sanggahan penyewa: {inspection?.disputeReason ?? "tanpa alasan tertulis"}
+        </InlineAlert>
+        <SelectInput
+          label="Keputusan"
+          value={decision}
+          onChange={(event) => setDecision(event.target.value as "UPHELD" | "REVISED")}
+          hint="Jika denda sudah tercatat sebagai tagihan dengan nominal berbeda, batalkan tagihan itu lebih dulu."
+        >
+          <option value="UPHELD">Pertahankan keputusan</option>
+          <option value="REVISED">Ubah nominal denda</option>
+        </SelectInput>
+        <TextInput
+          label="Nominal denda baru (Rp)"
+          inputMode="numeric"
+          value={penalty ?? ""}
+          disabled={decision === "UPHELD"}
+          onChange={(event) => setPenalty(event.target.value.replace(/\D/g, ""))}
+          hint="Hanya dipakai saat memilih “Ubah nominal”. Gunakan 0 untuk menghapus denda."
+        />
+        <TextArea label="Catatan keputusan" rows={2} value={note} onChange={(event) => setNote(event.target.value)} />
       </form>
     </Dialog>
   );

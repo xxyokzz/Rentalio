@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   ArrayMinSize,
+  IsIn,
   IsArray,
   IsEnum,
   IsInt,
@@ -134,6 +135,25 @@ export class CreateInspectionDto {
     message: 'Tingkat kerusakan harus MINOR, MODERATE, atau SEVERE.',
   })
   severity?: DamageSeverityDto;
+}
+
+/** Keputusan ulang atas sengketa penyewa. */
+export class ResolveInspectionDisputeDto {
+  @IsIn(['UPHELD', 'REVISED'], {
+    message: 'Keputusan sengketa harus UPHELD atau REVISED.',
+  })
+  decision!: 'UPHELD' | 'REVISED';
+
+  /** Wajib untuk REVISED: nominal denda baru (IDR rupiah utuh). */
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  penaltyAmount?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  note?: string;
 }
 
 export class SubmitInspectionDto {

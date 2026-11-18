@@ -31,6 +31,7 @@ import {
   RequestRefundDto,
   ReturnCollateralDto,
   ReverseDepositMovementDto,
+  VoidOrderPenaltyDto,
   VoidPaymentDto,
 } from './orders.dto.js';
 import { SessionGuard, CsrfGuard } from '../auth/auth.guards.js';
@@ -362,6 +363,30 @@ export class OrdersController {
   ) {
     return {
       data: await this.ordersService.createPenalty(tenantId, orderId, body, this.ctx(req)),
+    };
+  }
+
+  @Post('orders/:orderId/penalties/:penaltyId/void')
+  @HttpCode(200)
+  @UseGuards(CsrfGuard)
+  @ApiOperation({
+    summary: 'Batalkan denda order yang salah tagih (VOIDED + alasan + audit)',
+  })
+  async voidPenalty(
+    @Param('tenantId') tenantId: string,
+    @Param('orderId') orderId: string,
+    @Param('penaltyId') penaltyId: string,
+    @Body() body: VoidOrderPenaltyDto,
+    @Req() req: AuthedRequest,
+  ) {
+    return {
+      data: await this.ordersService.voidPenalty(
+        tenantId,
+        orderId,
+        penaltyId,
+        body,
+        this.ctx(req),
+      ),
     };
   }
 

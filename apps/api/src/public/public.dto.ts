@@ -92,6 +92,13 @@ export class PublicBookingTermsDto {
  * Pengajuan perpanjangan dari portal tamu. Hanya tanggal akhir baru dan
  * catatan; biaya, periode sebelumnya, dan konflik selalu dihitung server.
  */
+export class PortalInspectionDisputeDto {
+  @IsString()
+  @MinLength(5)
+  @MaxLength(500)
+  reason!: string;
+}
+
 export class PortalExtensionRequestDto {
   @IsISO8601()
   requestedEndAt!: string;

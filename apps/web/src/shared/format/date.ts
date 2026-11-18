@@ -198,3 +198,32 @@ export function startOfDayIso(iso: string, timeZone: string = DEFAULT_TIMEZONE):
   const localDate = isoToZonedDate(iso, timeZone);
   return zonedLocalToIso(`${localDate}T00:00`, timeZone) ?? iso;
 }
+
+/**
+ * Awal hari (00:00) tanggal `YYYY-MM-DD` pada zona waktu tenant, sebagai ISO UTC.
+ * Dipakai filter laporan: tanggal dipilih pengguna adalah tanggal toko, bukan UTC.
+ */
+export function zonedDateStartIso(
+  date: string,
+  timeZone: string = DEFAULT_TIMEZONE,
+): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date.trim())) return null;
+  return zonedLocalToIso(`${date.trim()}T00:00`, timeZone);
+}
+
+/**
+ * Akhir hari (23:59:59.999) pada zona tenant, dihitung dari awal hari berikutnya
+ * agar tetap benar saat zona memiliki pergantian DST.
+ */
+export function zonedDateEndIso(
+  date: string,
+  timeZone: string = DEFAULT_TIMEZONE,
+): string | null {
+  const start = zonedDateStartIso(date, timeZone);
+  if (!start) return null;
+  const [year, month, day] = date.trim().split("-").map(Number);
+  const nextDate = new Date(Date.UTC(year!, month! - 1, day! + 1)).toISOString().slice(0, 10);
+  const nextStart = zonedLocalToIso(`${nextDate}T00:00`, timeZone);
+  if (!nextStart) return null;
+  return new Date(new Date(nextStart).getTime() - 1).toISOString();
+}

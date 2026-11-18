@@ -149,6 +149,12 @@ export class UpdateTenantSettingsDto {
   @IsInt()
   @Min(1)
   damageFeeMaxAmount?: number | null;
+
+  /** Batas akumulasi denda aktif per order; `null` menghapus batas. */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  damagePenaltyOrderMaxAmount?: number | null;
 }
 
 /** Nominal denda kondisi khusus satu kategori produk. */

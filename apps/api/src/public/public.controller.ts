@@ -16,6 +16,7 @@ import { PublicService } from './public.service.js';
 import {
   CreatePublicBookingDto,
   PortalExtensionRequestDto,
+  PortalInspectionDisputeDto,
   PublicAvailabilityQueryDto,
   PublicHostQueryDto,
 } from './public.dto.js';
@@ -170,6 +171,24 @@ export class PortalController {
    * permintaan tetap PENDING_APPROVAL dan tidak mengubah jadwal sampai
    * diputuskan staff lewat command approve/reject internal.
    */
+  @Post('orders/:token/inspections/:inspectionId/dispute')
+  @HttpCode(201)
+  @Header('Cache-Control', 'no-store')
+  @ApiOperation({ summary: 'Sanggah hasil inspeksi lewat token pesanan' })
+  async disputeInspection(
+    @Param('token') token: string,
+    @Param('inspectionId') inspectionId: string,
+    @Body() body: PortalInspectionDisputeDto,
+    @Req() req: Request,
+  ) {
+    return {
+      data: await this.publicService.disputePortalInspection(token, inspectionId, body, {
+        ip: req.ip || req.socket?.remoteAddress || 'unknown',
+        correlationId: req.correlationId,
+      }),
+    };
+  }
+
   @Post('orders/:token/extensions')
   @HttpCode(201)
   @Header('Cache-Control', 'no-store')

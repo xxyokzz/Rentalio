@@ -9,6 +9,13 @@ export enum StorageUploadCategory {
   GENERAL = 'general',
 }
 
+export class RequestDownloadUrlDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(500)
+  objectKey!: string;
+}
+
 export class RequestUploadUrlDto {
   @IsEnum(StorageUploadCategory, {
     message: 'Kategori upload harus salah satu dari: branding, products, receipts, general',

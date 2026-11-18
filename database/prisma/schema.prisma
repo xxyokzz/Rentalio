@@ -524,6 +524,8 @@ model Tenant {
   damageFeeSevereAmount   BigInt  @default(0)
   /// Plafon usulan denda kondisi (null = tanpa plafon). Mencegah salah input.
   damageFeeMaxAmount      BigInt?
+  /// Batas total denda aktif per order (null = tanpa batas khusus order).
+  damagePenaltyOrderMaxAmount BigInt?
 
   // Kontak publik tenant untuk katalog, portal pesanan, dan instruksi
   // pembayaran manual (Notion 14 §E). Semua opsional; UI tidak mengarang
@@ -1164,6 +1166,7 @@ enum InspectionStatus {
   SUBMITTED // diajukan, menunggu keputusan
   APPROVED // keputusan disetujui (denda/tidak)
   REJECTED // keputusan ditolak (tidak ada kerusakan)
+  DISPUTED // penyewa menyanggah keputusan; menunggu keputusan ulang
 }
 
 /// Inspeksi kerusakan yang dilakukan staf setelah return.
@@ -1191,6 +1194,12 @@ model Inspection {
   inspectedAt       DateTime?
   submittedAt       DateTime?
   decidedAt         DateTime?
+  /// Sengketa penyewa: alasan, waktu, dan hasil keputusan ulang.
+  disputeReason     String?
+  disputedAt        DateTime?
+  /// UPHELD = keputusan dipertahankan; REVISED = nominal diubah.
+  disputeResolution String?
+  disputeResolvedAt DateTime?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
 
@@ -1238,12 +1247,18 @@ model OrderPenalty {
   amount         BigInt
   currency       String      @default("IDR")
   reason         String
+  /// RECORDED = ikut menambah tagihan; VOIDED = dibatalkan beserta alasannya.
+  status         String      @default("RECORDED")
+  voidedAt       DateTime?
+  voidedByUserId String?     @db.Uuid
+  voidedReason   String?
   createdByUserId String     @db.Uuid
   createdAt      DateTime    @default(now())
 
   @@unique([tenantId, id])
   @@unique([tenantId, inspectionId])
   @@index([tenantId, orderId])
+  @@index([tenantId, orderId, status])
   @@map("order_penalties")
 }
 

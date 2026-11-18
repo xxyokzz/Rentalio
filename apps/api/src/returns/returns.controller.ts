@@ -19,6 +19,7 @@ import {
   CreateInspectionDto,
   CreateReturnDto,
   DecideInspectionDto,
+  ResolveInspectionDisputeDto,
   SubmitInspectionDto,
 } from './returns.dto.js';
 import { SessionGuard, CsrfGuard } from '../auth/auth.guards.js';
@@ -237,6 +238,26 @@ export class ReturnsController {
       },
     );
     return { data };
+  }
+
+  @Post('inspections/:inspectionId/dispute/resolve')
+  @HttpCode(200)
+  @UseGuards(CsrfGuard)
+  @ApiOperation({
+    summary: 'Putuskan ulang sengketa penyewa — DISPUTED → APPROVED (UPHELD/REVISED)',
+  })
+  async resolveDispute(
+    @Param('tenantId') tenantId: string,
+    @Param('inspectionId') inspectionId: string,
+    @Body() body: ResolveInspectionDisputeDto,
+    @Req() req: AuthedRequest,
+  ) {
+    return {
+      data: await this.returnsService.resolveDispute(tenantId, inspectionId, body, {
+        actorUserId: this.uid(req),
+        correlationId: req.correlationId,
+      }),
+    };
   }
 
   @Post('inspections/:inspectionId/attachments')

@@ -29,6 +29,13 @@ process.env.PLATFORM_ADMIN_ENCRYPTION_KEY =
 // Skala besar agar test biasa tidak saling menghambat pada bucket IP.
 // Test rate-limit menurunkan skala ini sementara (lihat auth.integration.test.ts).
 process.env.RATE_LIMIT_SCALE = process.env.RATE_LIMIT_SCALE ?? '1000';
+// R2: nilai palsu khusus test. Presigned URL dibuat offline (tanpa jaringan),
+// jadi test storage tidak memerlukan kredensial Cloudflare nyata.
+process.env.R2_ACCOUNT_ID = process.env.R2_ACCOUNT_ID ?? 'test-account';
+process.env.R2_ACCESS_KEY_ID = process.env.R2_ACCESS_KEY_ID ?? 'test-access-key';
+process.env.R2_SECRET_ACCESS_KEY = process.env.R2_SECRET_ACCESS_KEY ?? 'test-secret-key';
+process.env.R2_BUCKET_NAME = process.env.R2_BUCKET_NAME ?? 'sewain-test';
+process.env.R2_PUBLIC_URL = process.env.R2_PUBLIC_URL ?? 'https://cdn.test.local';
 // Lingkungan shell induk dapat membawa PORT=0 (bukan integer valid untuk
 // kontrak kami); test tidak mendengarkan port, tapi konfigurasi tetap tervalidasi.
 process.env.PORT = process.env.PORT && process.env.PORT !== '0' ? process.env.PORT : '3000';

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { portalApi, type Schema } from "@/shared/api/endpoints";
 import { ExtensionPanel } from "./extension-panel";
+import { DisputePanel } from "./dispute-panel";
 import { describeApiError } from "@/shared/api/errors";
 import { formatIDR } from "@/shared/format/currency";
 import { formatDateRange, formatDateTime } from "@/shared/format/date";
@@ -31,8 +32,9 @@ function portalQuestion(order: PortalOrder): string {
 
 /**
  * Portal pesanan berbasis token (Notion 14): hanya status pesanan, rincian
- * item, sisa tagihan, dan instruksi pembayaran. Tidak ada aksi mutasi di sini —
- * pencatatan pembayaran tetap dilakukan petugas.
+ * item, sisa tagihan, dan instruksi pembayaran. Satu-satunya aksi dari sisi
+ * penyewa adalah menyanggah hasil inspeksi; pencatatan pembayaran tetap
+ * dilakukan petugas.
  */
 export function PortalPage({ token }: { token: string }) {
   const state = useApi(() => portalApi.getOrder(token), [token]);
@@ -244,6 +246,12 @@ export function PortalPage({ token }: { token: string }) {
           </PanelBody>
         </Panel>
       </div>
+
+      <DisputePanel
+        token={token}
+        inspection={order.inspection}
+        onSubmitted={() => state.reload()}
+      />
 
       <ExtensionPanel
         token={token}

@@ -219,6 +219,13 @@ export class CreateOrderPenaltyDto {
   reason!: string;
 }
 
+export class VoidOrderPenaltyDto {
+  @IsString()
+  @MinLength(3)
+  @MaxLength(500)
+  reason!: string;
+}
+
 export class DepositDecisionDto {
   @IsOptional()
   @IsString()

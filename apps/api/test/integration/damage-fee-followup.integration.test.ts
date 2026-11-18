@@ -243,6 +243,104 @@ describe('Denda kerusakan — tagihan order', () => {
   });
 });
 
+describe('Denda kerusakan — pembatalan denda', () => {
+  it('membatalkan denda sekali, mengeluarkannya dari tagihan, dan menyimpan alasan', async () => {
+    const fx = await setupOrder('penvoid');
+    const inspectionId = await approveInspection(fx, 90_000);
+    const created = await auth(
+      request(server).post(`${base(fx.tenantId)}/orders/${fx.orderId}/penalties`),
+      fx,
+    ).send({ inspectionId, reason: 'Kerusakan unit' });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+    const penaltyId = created.body.data.id as string;
+
+    const voided = await auth(
+      request(server).post(
+        `${base(fx.tenantId)}/orders/${fx.orderId}/penalties/${penaltyId}/void`,
+      ),
+      fx,
+    ).send({ reason: 'Salah unit, sudah diganti pelanggan' });
+    expect(voided.status, JSON.stringify(voided.body)).toBe(200);
+    expect(voided.body.data.status).toBe('VOIDED');
+    expect(voided.body.data.voidedReason).toBe('Salah unit, sudah diganti pelanggan');
+    expect(voided.body.data.voidedAt).toBeTruthy();
+
+    const order = await auth(
+      request(server).get(`${base(fx.tenantId)}/orders/${fx.orderId}`),
+      fx,
+    );
+    expect(order.body.data.penaltyTotalAmount).toBe('0');
+    expect(order.body.data.amountDue).toBe('0');
+    // Baris tetap tampil sebagai riwayat, bukan dihapus.
+    expect(order.body.data.penalties).toHaveLength(1);
+    expect(order.body.data.penalties[0].status).toBe('VOIDED');
+
+    // Idempoten: tidak ada audit kedua dan alasan lama tidak ditimpa.
+    const again = await auth(
+      request(server).post(
+        `${base(fx.tenantId)}/orders/${fx.orderId}/penalties/${penaltyId}/void`,
+      ),
+      fx,
+    ).send({ reason: 'Percobaan kedua' });
+    expect(again.status).toBe(200);
+    expect(again.body.data.voidedReason).toBe('Salah unit, sudah diganti pelanggan');
+
+    const audits = await prisma.withTenant(fx.tenantId, (tx) =>
+      tx.auditLog.findMany({ where: { tenantId: fx.tenantId, action: 'ORDER_PENALTY_VOIDED' } }),
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].reason).toBe('Salah unit, sudah diganti pelanggan');
+  });
+
+  it('menolak pembatalan denda milik order lain', async () => {
+    const fx = await setupOrder('penvoid404');
+    const other = await setupOrder('penvoid404b');
+    const inspectionId = await approveInspection(fx, 50_000);
+    const created = await auth(
+      request(server).post(`${base(fx.tenantId)}/orders/${fx.orderId}/penalties`),
+      fx,
+    ).send({ inspectionId, reason: 'Kerusakan unit' });
+    const penaltyId = created.body.data.id as string;
+
+    const res = await auth(
+      request(server).post(
+        `${base(other.tenantId)}/orders/${other.orderId}/penalties/${penaltyId}/void`,
+      ),
+      other,
+    ).send({ reason: 'Denda orang lain' });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('Denda kerusakan — batas total per order', () => {
+  it('menolak tagihan yang melewati batas akumulasi order dan menerima yang di bawahnya', async () => {
+    const fx = await setupOrder('pencap');
+    await setDamage(fx, {
+      damageFeeEnabled: true,
+      damageFeeSevereAmount: 200_000,
+      damagePenaltyOrderMaxAmount: 150_000,
+    });
+    const inspectionId = await approveInspection(fx, 200_000);
+
+    const rejected = await auth(
+      request(server).post(`${base(fx.tenantId)}/orders/${fx.orderId}/penalties`),
+      fx,
+    ).send({ inspectionId, reason: 'Melebihi batas order' });
+    expect(rejected.status).toBe(422);
+    expect(rejected.body.error.code).toBe('BUSINESS_RULE_VIOLATION');
+
+    const raised = await setDamage(fx, { damagePenaltyOrderMaxAmount: 300_000 });
+    expect(raised.status).toBe(204);
+
+    const accepted = await auth(
+      request(server).post(`${base(fx.tenantId)}/orders/${fx.orderId}/penalties`),
+      fx,
+    ).send({ inspectionId, reason: 'Masih dalam batas order' });
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(201);
+    expect(accepted.body.data.amount).toBe('200000');
+  });
+});
+
 describe('Denda kerusakan — potongan deposit', () => {
   it('nominal harus sama dengan denda dan hanya sekali per inspeksi', async () => {
     const fx = await setupOrder('pendeposit');
@@ -421,6 +519,83 @@ describe('Denda kerusakan — riwayat dan kategori', () => {
     // Override kategori (50.000) menang atas nominal tenant (350.000).
     expect(inspection.body.data.suggestedPenaltyAmount).toBe('50000');
   });
+
+  it('memulihkan revisi lama sebagai revisi baru tanpa menghapus riwayat', async () => {
+    const fx = await setupOrder('penrestore');
+    expect(
+      (
+        await setDamage(fx, {
+          damageInspectionEnabled: true,
+          damageFeeEnabled: true,
+          damageFeeSevereAmount: 300_000,
+          damageFeeMaxAmount: 500_000,
+        })
+      ).status,
+    ).toBe(204);
+
+    const before = await auth(
+      request(server).get(`${base(fx.tenantId)}/damage-fee-revisions`),
+      fx,
+    );
+    const target = before.body.data[0];
+    expect(target.severeAmount).toBe('300000');
+
+    expect(
+      (await setDamage(fx, { damageFeeSevereAmount: 100_000, damageFeeMaxAmount: null })).status,
+    ).toBe(204);
+
+    const restored = await auth(
+      request(server).post(
+        `${base(fx.tenantId)}/damage-fee-revisions/${target.id}/restore`,
+      ),
+      fx,
+    ).send({});
+    expect(restored.status, JSON.stringify(restored.body)).toBe(200);
+    expect(restored.body.data.severeAmount).toBe('300000');
+    expect(restored.body.data.maxAmount).toBe('500000');
+    expect(restored.body.data.id).not.toBe(target.id);
+
+    const after = await auth(
+      request(server).get(`${base(fx.tenantId)}/damage-fee-revisions`),
+      fx,
+    );
+    expect(after.body.data).toHaveLength(3);
+    expect(after.body.data[0].id).toBe(restored.body.data.id);
+
+    const tenant = await prisma.withTenant(fx.tenantId, (tx) =>
+      tx.tenant.findUniqueOrThrow({ where: { id: fx.tenantId } }),
+    );
+    expect(tenant.damageFeeSevereAmount).toBe(300_000n);
+    expect(tenant.damageFeeMaxAmount).toBe(500_000n);
+
+    const audits = await prisma.withTenant(fx.tenantId, (tx) =>
+      tx.auditLog.findMany({
+        where: { tenantId: fx.tenantId, action: 'DAMAGE_FEE_POLICY_RESTORED' },
+      }),
+    );
+    expect(audits).toHaveLength(1);
+    expect((audits[0].metadata as { revisionId?: string }).revisionId).toBe(target.id);
+  });
+
+  it('menolak pemulihan revisi milik tenant lain', async () => {
+    const owner = await setupOrder('penrestorea');
+    const other = await setupOrder('penrestoreb');
+    expect(
+      (await setDamage(other, { damageFeeEnabled: true, damageFeeSevereAmount: 250_000 })).status,
+    ).toBe(204);
+    const otherRevisions = await auth(
+      request(server).get(`${base(other.tenantId)}/damage-fee-revisions`),
+      other,
+    );
+
+    const attempt = await auth(
+      request(server).post(
+        `${base(owner.tenantId)}/damage-fee-revisions/${otherRevisions.body.data[0].id}/restore`,
+      ),
+      owner,
+    ).send({});
+    expect(attempt.status).toBe(404);
+  });
 });
 
 describe('Denda kerusakan — laporan', () => {
@@ -443,9 +618,86 @@ describe('Denda kerusakan — laporan', () => {
     expect(report.body.data.penalties.count).toBe(1);
     expect(report.body.data.penalties.totalAmount).toBe('200000');
     expect(report.body.data.inspections.APPROVED).toBe(1);
+    expect(report.body.data.inspections.DISPUTED).toBe(0);
+    expect(report.body.data.penalties.voidedCount).toBe(0);
     expect(report.body.data.severity.SEVERE.lines).toBe(1);
     expect(report.body.data.severity.SEVERE.suggestedAmount).toBe('200000');
     expect(report.body.data.topProducts[0].productId).toBe(fx.productId);
+    // Nama produk ikut agar laporan bisa dibaca tanpa mencocokkan id.
+    expect(report.body.data.topProducts[0].productName).toContain('Produk ');
+  });
+
+  it('denda yang dibatalkan tidak masuk total, tetapi dihitung terpisah', async () => {
+    const fx = await setupOrder('penreportvoid');
+    await setDamage(fx, { damageFeeEnabled: true, damageFeeSevereAmount: 200_000 });
+    const inspectionId = await approveInspection(fx, 150_000, {
+      items: [{ productId: fx.productId, quantity: 1, severity: 'MINOR' }],
+    });
+    const created = await auth(
+      request(server).post(`${base(fx.tenantId)}/orders/${fx.orderId}/penalties`),
+      fx,
+    ).send({ inspectionId, reason: 'Kerusakan unit' });
+    expect(created.status, JSON.stringify(created.body)).toBe(201);
+
+    const voided = await auth(
+      request(server).post(
+        `${base(fx.tenantId)}/orders/${fx.orderId}/penalties/${created.body.data.id}/void`,
+      ),
+      fx,
+    ).send({ reason: 'Salah unit' });
+    expect(voided.status).toBe(200);
+
+    const report = await auth(
+      request(server).get(`${base(fx.tenantId)}/reports/damage-fees`),
+      fx,
+    );
+    expect(report.status).toBe(200);
+    expect(report.body.data.penalties.count).toBe(0);
+    expect(report.body.data.penalties.totalAmount).toBe('0');
+    expect(report.body.data.penalties.voidedCount).toBe(1);
+  });
+});
+
+describe('Storage lampiran inspeksi', () => {
+  it('menerbitkan presigned upload hanya untuk tipe bukti yang diizinkan', async () => {
+    const fx = await setupOrder('storageup');
+
+    const rejected = await auth(
+      request(server).post(`${base(fx.tenantId)}/storage/upload-url`),
+      fx,
+    ).send({ category: 'inspections', filename: 'catatan.txt', contentType: 'text/plain' });
+    expect(rejected.status).toBe(400);
+
+    const ok = await auth(
+      request(server).post(`${base(fx.tenantId)}/storage/upload-url`),
+      fx,
+    ).send({ category: 'inspections', filename: 'foto.jpg', contentType: 'image/jpeg' });
+    expect(ok.status, JSON.stringify(ok.body)).toBe(200);
+    expect(ok.body.data.objectKey).toMatch(
+      new RegExp(`^tenants/${fx.tenantId}/inspections/[0-9a-f-]+\\.jpg$`),
+    );
+    expect(ok.body.data.uploadUrl).toContain('X-Amz-Signature');
+  });
+
+  it('menandatangani unduhan hanya untuk objek di namespace tenant aktif', async () => {
+    const fx = await setupOrder('storagedown');
+    const objectKey = `tenants/${fx.tenantId}/inspections/bukti.jpg`;
+
+    const signed = await auth(
+      request(server).get(`${base(fx.tenantId)}/storage/download-url`).query({ objectKey }),
+      fx,
+    );
+    expect(signed.status, JSON.stringify(signed.body)).toBe(200);
+    expect(signed.body.data.expiresInSeconds).toBe(300);
+    expect(signed.body.data.downloadUrl).toContain('X-Amz-Signature');
+
+    const foreign = await auth(
+      request(server)
+        .get(`${base(fx.tenantId)}/storage/download-url`)
+        .query({ objectKey: 'tenants/tenant-lain/inspections/bukti.jpg' }),
+      fx,
+    );
+    expect(foreign.status).toBe(400);
   });
 });
 

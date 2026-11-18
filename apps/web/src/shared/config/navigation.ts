@@ -53,7 +53,10 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     id: "laporan",
     label: "Laporan",
-    items: [{ href: "/app/reports", label: "Rekap operasional", glyph: "chart", permission: "report.read" }],
+    items: [
+      { href: "/app/reports", label: "Rekap operasional", glyph: "chart", permission: "report.read" },
+      { href: "/app/reports/damage-fees", label: "Laporan denda", glyph: "chart", permission: "report.read" },
+    ],
   },
   {
     id: "pengaturan",
@@ -160,6 +163,12 @@ export const ROUTE_MATRIX: RouteRule[] = [
     permission: "catalog.write",
     ownerOnly: true,
     actions: [{ action: "Kustomisasi tampilan katalog", permission: "catalog.write" }],
+  },
+  {
+    pattern: /^\/app\/reports\/damage-fees/,
+    label: "Laporan denda",
+    permission: "report.read",
+    actions: [],
   },
   { pattern: /^\/app\/reports/, label: "Rekap operasional", permission: "report.read", actions: [] },
   {

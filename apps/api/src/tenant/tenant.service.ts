@@ -211,8 +211,9 @@ export class TenantService {
     damageFeeEnabled: boolean;
     damageFeeMinorAmount: string;
     damageFeeModerateAmount: string;
-            damageFeeSevereAmount: string;
+        damageFeeSevereAmount: string;
         damageFeeMaxAmount: string | null;
+        damagePenaltyOrderMaxAmount: string | null;
     activatedAt: Date | null;
     trialEndsAt: Date | null;
     /** Status langganan efektif — dipakai UI untuk mode terbatas (bukan hitungan klien). */
@@ -268,6 +269,7 @@ export class TenantService {
         damageFeeModerateAmount: tenant.damageFeeModerateAmount.toString(),
         damageFeeSevereAmount: tenant.damageFeeSevereAmount.toString(),
         damageFeeMaxAmount: tenant.damageFeeMaxAmount?.toString() ?? null,
+        damagePenaltyOrderMaxAmount: tenant.damagePenaltyOrderMaxAmount?.toString() ?? null,
         activatedAt: tenant.activatedAt,
         trialEndsAt: tenant.trialEndsAt,
         subscription: {
@@ -405,6 +407,12 @@ export class TenantService {
             damageFeeMaxAmount:
               dto.damageFeeMaxAmount === null ? null : BigInt(dto.damageFeeMaxAmount),
           }),
+          ...(dto.damagePenaltyOrderMaxAmount !== undefined && {
+            damagePenaltyOrderMaxAmount:
+              dto.damagePenaltyOrderMaxAmount === null
+                ? null
+                : BigInt(dto.damagePenaltyOrderMaxAmount),
+          }),
         },
       });
 
@@ -475,17 +483,144 @@ export class TenantService {
         orderBy: { createdAt: 'desc' },
         take: 50,
       });
-      return rows.map((row) => ({
-        id: row.id,
-        inspectionEnabled: row.inspectionEnabled,
-        feeEnabled: row.feeEnabled,
-        minorAmount: row.minorAmount.toString(),
-        moderateAmount: row.moderateAmount.toString(),
-        severeAmount: row.severeAmount.toString(),
-        maxAmount: row.maxAmount?.toString() ?? null,
-        actorUserId: row.actorUserId,
-        createdAt: row.createdAt,
-      }));
+      return rows.map((row) => this.mapDamageFeeRevision(row));
+    });
+  }
+
+  private mapDamageFeeRevision(row: {
+    id: string;
+    inspectionEnabled: boolean;
+    feeEnabled: boolean;
+    minorAmount: bigint;
+    moderateAmount: bigint;
+    severeAmount: bigint;
+    maxAmount: bigint | null;
+    actorUserId: string;
+    createdAt: Date;
+  }) {
+    return {
+      id: row.id,
+      inspectionEnabled: row.inspectionEnabled,
+      feeEnabled: row.feeEnabled,
+      minorAmount: row.minorAmount.toString(),
+      moderateAmount: row.moderateAmount.toString(),
+      severeAmount: row.severeAmount.toString(),
+      maxAmount: row.maxAmount?.toString() ?? null,
+      actorUserId: row.actorUserId,
+      createdAt: row.createdAt,
+    };
+  }
+
+  /**
+   * Kembalikan kebijakan denda ke snapshot revisi lama.
+   *
+   * Revisi tidak dihapus dan tidak diubah; pemulihan menulis pengaturan tenant
+   * lalu menyimpan revisi baru, sehingga riwayat tetap append-only. Batas total
+   * per order tidak termasuk snapshot revisi, jadi nilainya tidak disentuh.
+   */
+  async restoreDamageFeeRevision(
+    tenantId: string,
+    revisionId: string,
+    ctx: { actorUserId: string; correlationId: string },
+  ) {
+    await this.requireMembership(tenantId, ctx.actorUserId, ['OWNER']);
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const revision = await tx.damageFeeRevision.findUnique({
+        where: { tenantId_id: { tenantId, id: revisionId } },
+      });
+      if (!revision) {
+        throw new ApiError(ErrorCode.NOT_FOUND, 'Revisi kebijakan denda tidak ditemukan.');
+      }
+
+      // Snapshot lama bisa berasal dari aturan yang kini tidak valid (mis. denda
+      // aktif tanpa inspeksi); tolak dengan pesan yang sama seperti pengaturan.
+      if (revision.feeEnabled && !revision.inspectionEnabled) {
+        throw new ApiError(
+          ErrorCode.VALIDATION_ERROR,
+          'Revisi ini mengaktifkan denda tanpa inspeksi; aktifkan inspeksi lebih dulu.',
+        );
+      }
+      if (
+        revision.feeEnabled &&
+        [revision.minorAmount, revision.moderateAmount, revision.severeAmount].every(
+          (amount) => amount <= 0n,
+        )
+      ) {
+        throw new ApiError(
+          ErrorCode.VALIDATION_ERROR,
+          'Revisi ini mengaktifkan denda tanpa nominal; isi nominal lebih dulu.',
+        );
+      }
+
+      const current = await tx.tenant.findUniqueOrThrow({
+        where: { id: tenantId },
+        select: {
+          damageInspectionEnabled: true,
+          damageFeeEnabled: true,
+          damageFeeMinorAmount: true,
+          damageFeeModerateAmount: true,
+          damageFeeSevereAmount: true,
+          damageFeeMaxAmount: true,
+        },
+      });
+
+      await tx.tenant.update({
+        where: { id: tenantId },
+        data: {
+          damageInspectionEnabled: revision.inspectionEnabled,
+          damageFeeEnabled: revision.feeEnabled,
+          damageFeeMinorAmount: revision.minorAmount,
+          damageFeeModerateAmount: revision.moderateAmount,
+          damageFeeSevereAmount: revision.severeAmount,
+          damageFeeMaxAmount: revision.maxAmount,
+        },
+      });
+
+      const restored = await tx.damageFeeRevision.create({
+        data: {
+          tenantId,
+          actorUserId: ctx.actorUserId,
+          inspectionEnabled: revision.inspectionEnabled,
+          feeEnabled: revision.feeEnabled,
+          minorAmount: revision.minorAmount,
+          moderateAmount: revision.moderateAmount,
+          severeAmount: revision.severeAmount,
+          maxAmount: revision.maxAmount,
+        },
+      });
+
+      const before = {
+        inspectionEnabled: current.damageInspectionEnabled,
+        feeEnabled: current.damageFeeEnabled,
+        minorAmount: current.damageFeeMinorAmount.toString(),
+        moderateAmount: current.damageFeeModerateAmount.toString(),
+        severeAmount: current.damageFeeSevereAmount.toString(),
+        maxAmount: current.damageFeeMaxAmount?.toString() ?? null,
+      };
+      const after = {
+        inspectionEnabled: revision.inspectionEnabled,
+        feeEnabled: revision.feeEnabled,
+        minorAmount: revision.minorAmount.toString(),
+        moderateAmount: revision.moderateAmount.toString(),
+        severeAmount: revision.severeAmount.toString(),
+        maxAmount: revision.maxAmount?.toString() ?? null,
+      };
+
+      await this.audit.record(
+        {
+          tenantId,
+          actorUserId: ctx.actorUserId,
+          action: 'DAMAGE_FEE_POLICY_RESTORED',
+          domain: 'tenant',
+          entityType: 'tenant',
+          entityId: tenantId,
+          correlationId: ctx.correlationId,
+          metadata: { revisionId, before, after },
+        },
+        tx,
+      );
+
+      return this.mapDamageFeeRevision(restored);
     });
   }
 

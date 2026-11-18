@@ -37,6 +37,7 @@ import { PaymentsPanel } from "./payments-panel";
 import { DepositPanel } from "./deposit-panel";
 import { CollateralPanel } from "./collateral-panel";
 import { ReturnsPanel } from "./returns-panel";
+import { PenaltiesPanel } from "./penalties-panel";
 import { buildProductNames, itemLabel } from "./item-label";
 import { ExtensionsPanel } from "./extensions-panel";
 
@@ -156,8 +157,8 @@ export function OrderDetail({ orderId }: { orderId: string }) {
               <Stat label="Dibayar" value={<span className="money">{formatIDR(data.order.paidAmount)}</span>} />
               <Stat
                 label="Sisa tagihan"
-                value={<span className="money">{formatIDR(data.order.outstandingAmount)}</span>}
-                note="Pembayaran terpisah dari lifecycle"
+                value={<span className="money">{formatIDR(data.order.amountDue)}</span>}
+                note="Termasuk denda kerusakan yang tercatat"
               />
             </div>
 
@@ -249,21 +250,29 @@ export function OrderDetail({ orderId }: { orderId: string }) {
                   </Panel>
 
                   <InlineAlert tone="info">
-                    Lampiran foto/bukti serah-terima dan inspeksi memerlukan endpoint upload storage yang
-                    belum tersedia pada kontrak OpenAPI; UI tidak memalsukan unggahan.
+                    Bukti foto inspeksi diunggah lewat presigned URL dan hanya bisa diunduh lewat tautan
+                    bertanda tangan 5 menit. Buka tab Pengembalian &amp; inspeksi → Lampiran untuk mengelola
+                    foto kerusakan.
                   </InlineAlert>
                 </div>
               ) : null}
 
               {tab === "pembayaran" ? (
                 tenantId ? (
-                  <PaymentsPanel
-                    tenantId={tenantId}
-                    order={data.order}
-                    refunds={data.refunds}
-                    refundsLoading={false}
-                    onChanged={state.reload}
-                  />
+                  <div className="stack">
+                    <PaymentsPanel
+                      tenantId={tenantId}
+                      order={data.order}
+                      refunds={data.refunds}
+                      refundsLoading={false}
+                      onChanged={state.reload}
+                    />
+                    <PenaltiesPanel
+                      tenantId={tenantId}
+                      order={data.order}
+                      onChanged={state.reload}
+                    />
+                  </div>
                 ) : null
               ) : null}
 

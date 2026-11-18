@@ -932,3 +932,116 @@ describe('Publik — domain kustom tenant', () => {
     expect(catalog.body.data.products[0].id).not.toBe(b.productId);
   });
 });
+
+// ============================================================
+// Sengketa hasil inspeksi dari portal (§ backlog #5)
+// ============================================================
+
+describe('Sengketa inspeksi dari portal', () => {
+  async function bookedOrderWithApprovedInspection(prefix: string) {
+    const f = await setupFixture(prefix, { stockMode: 'QUANTITY', capacity: 1 });
+    await updateSettings(f, {
+      bookingMode: 'MANUAL',
+      damageInspectionEnabled: true,
+      damageFeeEnabled: true,
+      damageFeeSevereAmount: 100_000,
+    });
+    const booking = await postBooking(f, bookingBody(f));
+    expect(booking.status, JSON.stringify(booking.body)).toBe(201);
+    const reservationId = booking.body.data.reservation.reference as string;
+    const token = booking.body.data.portal.token as string;
+    const orderId = await activateBookedOrder(f, reservationId);
+    const inspection = await prisma.withTenant(f.tenantId, (tx) =>
+      tx.inspection.create({
+        data: {
+          tenantId: f.tenantId,
+          orderId,
+          status: 'APPROVED',
+          summary: 'Bodi penyok',
+          penaltyAmount: 100_000n,
+          currency: 'IDR',
+          submittedAt: new Date(),
+          decidedAt: new Date(),
+        },
+      }),
+    );
+    return { f, token, orderId, inspectionId: inspection.id };
+  }
+
+  it('menyanggah lewat portal, memblokir tagihan, lalu toko mengubah nominal', async () => {
+    const { f, token, orderId, inspectionId } = await bookedOrderWithApprovedInspection('pubdispute');
+
+    const dispute = await request(server)
+      .post(`${API}/portal/orders/${token}/inspections/${inspectionId}/dispute`)
+      .send({ reason: 'Kerusakan sudah ada sebelum disewa' });
+    expect(dispute.status, JSON.stringify(dispute.body)).toBe(201);
+    expect(dispute.body.data.status).toBe('DISPUTED');
+
+    const portal = await request(server).get(`${API}/portal/orders/${token}`);
+    expect(portal.status).toBe(200);
+    expect(portal.body.data.inspection.status).toBe('DISPUTED');
+    expect(portal.body.data.inspection.canDispute).toBe(false);
+    expect(portal.body.data.inspection.disputeReason).toContain('sebelum disewa');
+
+    // Denda tidak boleh ditagihkan selama sengketa.
+    const blocked = await request(server)
+      .post(`${base(f.tenantId)}/orders/${orderId}/penalties`)
+      .set(auth(f))
+      .send({ inspectionId, reason: 'Tagih saat sengketa' });
+    expect(blocked.status).toBe(409);
+
+    const resolve = await request(server)
+      .post(`${base(f.tenantId)}/inspections/${inspectionId}/dispute/resolve`)
+      .set(auth(f))
+      .send({ decision: 'REVISED', penaltyAmount: 40_000, note: 'Dikurangi sesuai bukti' });
+    expect(resolve.status, JSON.stringify(resolve.body)).toBe(200);
+    expect(resolve.body.data.status).toBe('APPROVED');
+    expect(resolve.body.data.penaltyAmount).toBe('40000');
+    expect(resolve.body.data.disputeResolution).toBe('REVISED');
+
+    const audits = await prisma.withTenant(f.tenantId, (tx) =>
+      tx.auditLog.findMany({
+        where: {
+          tenantId: f.tenantId,
+          action: { in: ['INSPECTION_DISPUTED', 'INSPECTION_DISPUTE_RESOLVED'] },
+        },
+      }),
+    );
+    expect(audits).toHaveLength(2);
+  });
+
+  it('menolak perubahan nominal bila denda sudah tercatat dengan angka berbeda', async () => {
+    const { f, token, orderId, inspectionId } = await bookedOrderWithApprovedInspection('pubdisputepen');
+
+    await request(server)
+      .post(`${API}/portal/orders/${token}/inspections/${inspectionId}/dispute`)
+      .send({ reason: 'Nominal terlalu tinggi' });
+
+    const penalty = await request(server)
+      .post(`${base(f.tenantId)}/orders/${orderId}/penalties`)
+      .set(auth(f))
+      .send({ inspectionId, reason: 'Tagih saat sengketa' });
+    // Sengketa memblokir tagihan; tegaskan di sini sebelum menguji guard nominal.
+    expect(penalty.status).toBe(409);
+
+    await request(server)
+      .post(`${base(f.tenantId)}/inspections/${inspectionId}/dispute/resolve`)
+      .set(auth(f))
+      .send({ decision: 'UPHELD' });
+    const recorded = await request(server)
+      .post(`${base(f.tenantId)}/orders/${orderId}/penalties`)
+      .set(auth(f))
+      .send({ inspectionId, reason: 'Denda sesuai keputusan' });
+    expect(recorded.status, JSON.stringify(recorded.body)).toBe(201);
+
+    await request(server)
+      .post(`${API}/portal/orders/${token}/inspections/${inspectionId}/dispute`)
+      .send({ reason: 'Masih keberatan dengan nominal' });
+    const revise = await request(server)
+      .post(`${base(f.tenantId)}/inspections/${inspectionId}/dispute/resolve`)
+      .set(auth(f))
+      .send({ decision: 'REVISED', penaltyAmount: 30_000 });
+    expect(revise.status).toBe(422);
+    expect(revise.body.error.code).toBe('BUSINESS_RULE_VIOLATION');
+  });
+});

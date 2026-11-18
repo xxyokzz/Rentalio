@@ -1,4 +1,9 @@
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  GetObjectCommand,
+  DeleteObjectCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Injectable, Inject } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
@@ -74,6 +79,20 @@ export class StorageService {
     const objectKey = `tenants/${tenantId}/${category}/${randomSuffix}.${ext}`;
 
     return this.createUploadUrl(objectKey, contentType, expiresInSeconds);
+  }
+
+  /**
+   * Presigned URL baca berumur pendek untuk objek privat.
+   *
+   * Lampiran inspeksi tidak boleh diakses lewat URL publik permanen; tautan
+   * ini ditandatangani dengan kredensial server dan kedaluwarsa cepat.
+   */
+  async createDownloadUrl(objectKey: string, expiresInSeconds = 300): Promise<string> {
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: objectKey,
+    });
+    return getSignedUrl(this.s3, command, { expiresIn: expiresInSeconds });
   }
 
   /**

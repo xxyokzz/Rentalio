@@ -20,6 +20,7 @@ import { Button } from "@/shared/ui/buttons";
 import { CheckboxField, SelectInput, TextArea, TextInput } from "@/shared/ui/form";
 import { useToast } from "@/shared/ui/overlays";
 import { DefinitionList, Panel, PageHeader, PanelBody, PanelHead, StatusBadge } from "@/shared/ui/surfaces";
+import { DamageFeeHistory } from "./damage-fee-history";
 import { subscriptionSummary } from "@/features/subscription/subscription-summary";
 import { subscriptionRequest } from "@/features/subscription/subscription-request";
 import { EmptyState, InlineAlert, LoadingBlock } from "@/shared/ui/states";
@@ -54,6 +55,7 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
     damageFeeModerateAmount?: string;
     damageFeeSevereAmount?: string;
     damageFeeMaxAmount?: string;
+    damagePenaltyOrderMaxAmount?: string;
   }>({});
   const [busy, setBusy] = useState(false);
   // Nominal denda per kategori dimuat dan disimpan terpisah dari form tenant:
@@ -93,6 +95,8 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
     draft.damageFeeModerateAmount ?? tenant?.damageFeeModerateAmount ?? "";
   const damageFeeSevereAmount = draft.damageFeeSevereAmount ?? tenant?.damageFeeSevereAmount ?? "";
   const damageFeeMaxAmount = draft.damageFeeMaxAmount ?? tenant?.damageFeeMaxAmount ?? "";
+  const damagePenaltyOrderMaxAmount =
+    draft.damagePenaltyOrderMaxAmount ?? tenant?.damagePenaltyOrderMaxAmount ?? "";
   // Server menolak denda aktif tanpa nominal; UI hanya memberi peringatan awal.
   const damageFeeAmounts = [
     damageFeeMinorAmount,
@@ -246,6 +250,9 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
         // Kosong berarti tanpa plafon; server menyimpannya sebagai null.
         damageFeeMaxAmount: damageFeeMaxAmount
           ? Number.parseInt(damageFeeMaxAmount, 10)
+          : null,
+        damagePenaltyOrderMaxAmount: damagePenaltyOrderMaxAmount
+          ? Number.parseInt(damagePenaltyOrderMaxAmount, 10)
           : null,
       });
       await refresh();
@@ -655,6 +662,19 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
                   }
                   hint="Opsional. Usulan di atas plafon dipotong otomatis dan ditandai di inspeksi. Kosongkan bila tanpa plafon."
                 />
+                <TextInput
+                  label="Batas total denda per order (Rp)"
+                  inputMode="numeric"
+                  value={damagePenaltyOrderMaxAmount}
+                  disabled={!damageFeeEnabled}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      damagePenaltyOrderMaxAmount: event.target.value.replace(/\D/g, ""),
+                    }))
+                  }
+                  hint="Opsional. Menolak pencatatan denda baru bila akumulasi denda aktif pada satu order melebihi batas ini."
+                />
                 {damageFeeInvalid ? (
                   <InlineAlert tone="warning">
                     Isi minimal satu nominal lebih dari Rp0 dan aktifkan inspeksi sebelum denda kondisi
@@ -666,6 +686,38 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
                   tidak mengubah usulan inspeksi yang sedang berjalan. Usulan tidak otomatis menagih atau
                   memotong deposit.
                 </p>
+
+                {tenantId ? (
+                  <DamageFeeHistory
+                    tenantId={tenantId}
+                    timezone={tenant.timezone ?? "Asia/Jakarta"}
+                    // Bandingkan dengan nilai tersimpan, bukan draft yang belum
+                    // disimpan, agar label "Saat ini" tidak menyesatkan.
+                    current={{
+                      inspectionEnabled: tenant.damageInspectionEnabled !== false,
+                      feeEnabled: tenant.damageFeeEnabled === true,
+                      minorAmount: tenant.damageFeeMinorAmount ?? "",
+                      moderateAmount: tenant.damageFeeModerateAmount ?? "",
+                      severeAmount: tenant.damageFeeSevereAmount ?? "",
+                      maxAmount: tenant.damageFeeMaxAmount ?? "",
+                    }}
+                    canRestore={isOwner}
+                    onRestored={async () => {
+                      // Nilai yang dipulihkan berasal dari server; buang draft
+                      // lama agar form menampilkan kebijakan hasil pemulihan.
+                      setDraft((current) => ({
+                        ...current,
+                        damageInspectionEnabled: undefined,
+                        damageFeeEnabled: undefined,
+                        damageFeeMinorAmount: undefined,
+                        damageFeeModerateAmount: undefined,
+                        damageFeeSevereAmount: undefined,
+                        damageFeeMaxAmount: undefined,
+                      }));
+                      await refresh();
+                    }}
+                  />
+                ) : null}
 
                 <div className="stack-sm">
                   <div>

@@ -26,6 +26,7 @@ import type {
   RequestRefundDto,
   ReturnCollateralDto,
   ReverseDepositMovementDto,
+  VoidOrderPenaltyDto,
   VoidPaymentDto,
 } from './orders.dto.js';
 
@@ -1028,6 +1029,27 @@ export class OrdersService {
       });
       if (existing) return this.mapPenalty(existing);
 
+      // Batas akumulasi denda per order (opsional). Plafon per inspeksi sudah
+      // diterapkan saat usulan dihitung; di sini dicek total tagihan aktif.
+      const tenant = await tx.tenant.findUnique({
+        where: { id: tenantId },
+        select: { damagePenaltyOrderMaxAmount: true },
+      });
+      const orderCap = tenant?.damagePenaltyOrderMaxAmount ?? null;
+      if (orderCap != null) {
+        const recorded = await tx.orderPenalty.aggregate({
+          where: { tenantId, orderId, status: 'RECORDED' },
+          _sum: { amount: true },
+        });
+        const total = (recorded._sum.amount ?? 0n) + inspection.penaltyAmount;
+        if (total > orderCap) {
+          throw new ApiError(
+            ErrorCode.BUSINESS_RULE_VIOLATION,
+            `Total denda order melebihi batas ${orderCap.toString()} yang diatur tenant.`,
+          );
+        }
+      }
+
       const penalty = await tx.orderPenalty.create({
         data: {
           tenantId,
@@ -1061,6 +1083,66 @@ export class OrdersService {
       );
 
       return this.mapPenalty(penalty);
+    });
+  }
+
+  /**
+   * Batalkan denda yang salah tagih tanpa menghapus baris.
+   *
+   * Baris berstatus VOIDED tetap tersimpan beserta aktor dan alasannya, tetapi
+   * tidak lagi dihitung dalam `penaltyTotalAmount`/`amountDue`. Permintaan
+   * kedua mengembalikan baris yang sama (idempoten) tanpa audit ganda.
+   */
+  async voidPenalty(
+    tenantId: string,
+    orderId: string,
+    penaltyId: string,
+    dto: VoidOrderPenaltyDto,
+    ctx: Ctx,
+  ) {
+    await this.tenantService.requireMembership(tenantId, ctx.actorUserId, ['OWNER', 'MANAGER']);
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      await this.requireOrder(tx, tenantId, orderId);
+      const penalty = await tx.orderPenalty.findUnique({
+        where: { tenantId_id: { tenantId, id: penaltyId } },
+      });
+      if (!penalty || penalty.orderId !== orderId) {
+        throw new ApiError(ErrorCode.NOT_FOUND, 'Denda tidak ditemukan pada order ini.');
+      }
+      if (penalty.status === 'VOIDED') return this.mapPenalty(penalty);
+
+      const voided = await tx.orderPenalty.update({
+        where: { tenantId_id: { tenantId, id: penaltyId } },
+        data: {
+          status: 'VOIDED',
+          voidedAt: new Date(),
+          voidedByUserId: ctx.actorUserId,
+          voidedReason: dto.reason.trim(),
+        },
+      });
+
+      await this.audit.record(
+        {
+          tenantId,
+          actorUserId: ctx.actorUserId,
+          action: 'ORDER_PENALTY_VOIDED',
+          domain: 'returns',
+          entityType: 'order_penalty',
+          entityId: penalty.id,
+          fromState: 'RECORDED',
+          toState: 'VOIDED',
+          correlationId: ctx.correlationId,
+          reason: voided.voidedReason ?? undefined,
+          metadata: {
+            orderId,
+            inspectionId: penalty.inspectionId,
+            amount: penalty.amount.toString(),
+          },
+        },
+        tx,
+      );
+
+      return this.mapPenalty(voided);
     });
   }
 
@@ -1895,8 +1977,11 @@ export class OrdersService {
       .filter((payment) => payment.status === 'RECORDED')
       .reduce((sum, payment) => sum + payment.amount, 0n);
     // Denda kerusakan adalah tagihan terpisah dari harga sewa: totalAmount
-    // tetap nilai sewa, sementara amountDue menjumlahkan keduanya.
-    const penaltyTotal = row.penalties.reduce((sum, penalty) => sum + penalty.amount, 0n);
+    // tetap nilai sewa, sementara amountDue menjumlahkan keduanya. Denda
+    // VOIDED tetap tampil di riwayat tetapi tidak menambah tagihan.
+    const penaltyTotal = row.penalties
+      .filter((penalty) => penalty.status === 'RECORDED')
+      .reduce((sum, penalty) => sum + penalty.amount, 0n);
     return {
       id: row.id,
       orderNumber: row.orderNumber,
@@ -2022,6 +2107,9 @@ export class OrdersService {
       amount: penalty.amount.toString(),
       currency: penalty.currency,
       reason: penalty.reason,
+      status: penalty.status,
+      voidedAt: penalty.voidedAt,
+      voidedReason: penalty.voidedReason,
       createdByUserId: penalty.createdByUserId,
       createdAt: penalty.createdAt,
     };

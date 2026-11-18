@@ -11,6 +11,7 @@ import type {
   CreateInspectionDto,
   CreateReturnDto,
   DecideInspectionDto,
+  ResolveInspectionDisputeDto,
   SubmitInspectionDto,
 } from './returns.dto.js';
 import { InspectionDecisionDto } from './returns.dto.js';
@@ -712,6 +713,94 @@ export class ReturnsService {
   }
 
   /**
+   * Putuskan ulang inspeksi yang disanggah penyewa.
+   *
+   * UPHELD mempertahankan nominal; REVISED mewajibkan nominal baru. Bila denda
+   * sudah tercatat sebagai tagihan dengan nominal berbeda, keputusan ditolak:
+   * tagihan lama harus dibatalkan lebih dulu agar ledger tetap konsisten.
+   */
+  async resolveDispute(
+    tenantId: string,
+    inspectionId: string,
+    dto: ResolveInspectionDisputeDto,
+    ctx: Ctx,
+  ) {
+    await this.tenantService.requireMembership(tenantId, ctx.actorUserId, DECIDE_ROLES);
+    return this.prisma.withTenant(tenantId, async (tx) => {
+      const existing = await tx.inspection.findUnique({
+        where: { tenantId_id: { tenantId, id: inspectionId } },
+      });
+      if (!existing) throw new ApiError(ErrorCode.NOT_FOUND, 'Inspeksi tidak ditemukan.');
+      if (existing.status !== 'DISPUTED') {
+        throw new ApiError(
+          ErrorCode.INVALID_STATE_TRANSITION,
+          'Hanya inspeksi berstatus DISPUTED yang dapat diputuskan ulang.',
+        );
+      }
+
+      if (dto.decision === 'REVISED' && dto.penaltyAmount === undefined) {
+        throw new ApiError(
+          ErrorCode.VALIDATION_ERROR,
+          'penaltyAmount wajib diisi untuk keputusan REVISED.',
+        );
+      }
+      const revisedAmount =
+        dto.decision === 'REVISED' ? BigInt(dto.penaltyAmount ?? 0) : (existing.penaltyAmount ?? 0n);
+
+      const recorded = await tx.orderPenalty.findUnique({
+        where: { tenantId_inspectionId: { tenantId, inspectionId } },
+      });
+      if (recorded && recorded.status === 'RECORDED' && recorded.amount !== revisedAmount) {
+        throw new ApiError(
+          ErrorCode.BUSINESS_RULE_VIOLATION,
+          'Denda inspeksi ini sudah tercatat sebagai tagihan. Batalkan tagihan tersebut sebelum mengubah nominal.',
+        );
+      }
+
+      const updated = await tx.inspection.update({
+        where: { tenantId_id: { tenantId, id: inspectionId } },
+        data: {
+          status: 'APPROVED',
+          approvedByUserId: ctx.actorUserId,
+          decidedAt: new Date(),
+          penaltyAmount: revisedAmount,
+          disputeResolution: dto.decision,
+          disputeResolvedAt: new Date(),
+          ...(dto.note !== undefined && { summary: dto.note?.trim() ?? existing.summary }),
+        },
+        include: { attachments: true, items: { orderBy: { createdAt: 'asc' } } },
+      });
+
+      await this.audit.record(
+        {
+          tenantId,
+          actorUserId: ctx.actorUserId,
+          action: 'INSPECTION_DISPUTE_RESOLVED',
+          domain: 'returns',
+          entityType: 'inspection',
+          entityId: inspectionId,
+          fromState: 'DISPUTED',
+          toState: 'APPROVED',
+          correlationId: ctx.correlationId,
+          reason: existing.disputeReason ?? undefined,
+          metadata: {
+            orderId: existing.orderId,
+            decision: dto.decision,
+            previousPenaltyAmount: existing.penaltyAmount?.toString() ?? null,
+            penaltyAmount: revisedAmount.toString(),
+          },
+        },
+        tx,
+      );
+
+      return this.mapInspection(
+        updated,
+        await this.lateFeeForInspection(tx, tenantId, updated),
+      );
+    });
+  }
+
+  /**
    * Teks WhatsApp hasil inspeksi (item 10).
    *
    * Sengaja tidak memakai template pembayaran: `PaymentContext` terikat pada
@@ -1170,6 +1259,10 @@ export class ReturnsService {
       approvedByUserId: row.approvedByUserId,
       summary: row.summary,
       penaltyAmount: row.penaltyAmount?.toString() ?? null,
+      disputeReason: row.disputeReason,
+      disputedAt: row.disputedAt,
+      disputeResolution: row.disputeResolution,
+      disputeResolvedAt: row.disputeResolvedAt,
       severity: row.severity,
       suggestedPenaltyAmount: row.suggestedPenaltyAmount?.toString() ?? null,
       items: row.items.map((item) => ({

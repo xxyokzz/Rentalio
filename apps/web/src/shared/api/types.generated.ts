@@ -153,6 +153,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/portal/orders/{token}/inspections/{inspectionId}/dispute": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Sanggah hasil inspeksi lewat token pesanan
+         * @description Hanya inspeksi APPROVED milik pesanan token ini yang dapat disanggah. Status menjadi DISPUTED sehingga denda tidak bisa ditagihkan sampai owner/manager memutuskan ulang. Permintaan ulang bersifat idempoten.
+         */
+        post: operations["disputePortalInspection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/portal/orders/{token}/extensions": {
         parameters: {
             query?: never;
@@ -1902,6 +1922,95 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tenants/{tenantId}/orders/{orderId}/penalties/{penaltyId}/void": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Batalkan denda order yang salah tagih
+         * @description Menandai denda VOIDED beserta alasan dan aktor; baris tidak dihapus dan
+         *     tetap muncul di riwayat order. `amountDue` dan `penaltyTotalAmount`
+         *     menghitung ulang tanpa denda ini. Permintaan kedua bersifat idempoten.
+         */
+        post: operations["voidOrderPenalty"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenants/{tenantId}/inspections/{inspectionId}/dispute/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Putuskan ulang sengketa penyewa (DISPUTED → APPROVED)
+         * @description UPHELD mempertahankan nominal denda; REVISED mewajibkan `penaltyAmount`
+         *     baru. Bila denda sudah tercatat sebagai tagihan dengan nominal berbeda,
+         *     permintaan ditolak 422 — batalkan tagihan lebih dulu agar ledger konsisten.
+         *     Sengketa hanya bisa diputuskan saat inspeksi berstatus DISPUTED.
+         */
+        post: operations["resolveInspectionDispute"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenants/{tenantId}/storage/upload-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Minta presigned URL upload terisolasi tenant
+         * @description Kunci objek dibuat server sebagai `tenants/{tenantId}/{category}/{uuid}.{ext}`.
+         *     Kategori `inspections` hanya menerima JPEG/PNG/WebP/PDF dan maksimal
+         *     10 MB (divalidasi juga saat metadata lampiran didaftarkan).
+         */
+        post: operations["requestStorageUploadUrl"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenants/{tenantId}/storage/download-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Minta presigned URL unduh berumur pendek
+         * @description `objectKey` wajib berprefix `tenants/{tenantId}/`. Tautan berlaku 300
+         *     detik, sehingga bukti inspeksi tidak dapat dibagikan lewat URL publik
+         *     permanen.
+         */
+        get: operations["requestStorageDownloadUrl"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tenants/{tenantId}/damage-fee-revisions": {
         parameters: {
             query?: never;
@@ -1913,6 +2022,26 @@ export interface paths {
         get: operations["listDamageFeeRevisions"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tenants/{tenantId}/damage-fee-revisions/{revisionId}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Kembalikan kebijakan denda ke revisi lama (OWNER)
+         * @description Menulis ulang pengaturan inspeksi/plafon/nominal denda dari snapshot revisi, lalu menyimpan revisi baru sehingga riwayat tetap append-only. Revisi tidak dihapus. Batas total denda per order tidak termasuk snapshot sehingga tidak berubah. 422 bila snapshot lama tidak lagi valid (denda aktif tanpa inspeksi atau tanpa nominal).
+         */
+        post: operations["restoreDamageFeeRevision"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2495,6 +2624,8 @@ export interface components {
             damageFeeSevereAmount?: string;
             /** @description Plafon usulan denda kondisi per inspeksi; null berarti tanpa plafon. */
             damageFeeMaxAmount?: string | null;
+            /** @description Batas total denda aktif per order; null berarti tanpa batas. */
+            damagePenaltyOrderMaxAmount?: string | null;
             /** Format: date-time */
             activatedAt?: string | null;
             /** Format: date-time */
@@ -2608,6 +2739,8 @@ export interface components {
             damageFeeSevereAmount?: number;
             /** @description Plafon total usulan denda kondisi; null menghapus plafon. */
             damageFeeMaxAmount?: number | null;
+            /** @description Batas total denda aktif per order; null menghapus batas. */
+            damagePenaltyOrderMaxAmount?: number | null;
         };
         InviteMemberRequest: {
             /** Format: email */
@@ -2976,6 +3109,16 @@ export interface components {
                 SEVERE?: string;
             };
         };
+        CreateInspectionAttachmentRequest: {
+            objectKey: string;
+            /** @default image/jpeg */
+            mimeType: string;
+            altText?: string;
+            /** @default 0 */
+            sortOrder: number;
+            /** @description Ukuran objek hasil upload; server menolak di atas 10 MB. */
+            fileSizeBytes?: number;
+        };
         InspectionItemInput: {
             /** Format: uuid */
             productId: string;
@@ -3026,10 +3169,37 @@ export interface components {
             /** @enum {string} */
             currency?: "IDR";
             reason?: string;
+            /**
+             * @description VOIDED tidak dihitung dalam penaltyTotalAmount/amountDue.
+             * @enum {string}
+             */
+            status?: "RECORDED" | "VOIDED";
+            /** Format: date-time */
+            voidedAt?: string | null;
+            voidedReason?: string | null;
             /** Format: uuid */
             createdByUserId?: string;
             /** Format: date-time */
             createdAt?: string;
+        };
+        RequestStorageUploadUrl: {
+            /** @enum {string} */
+            category: "branding" | "products" | "receipts" | "inspections" | "general";
+            filename: string;
+            contentType: string;
+        };
+        StorageUploadUrlResponse: {
+            uploadUrl?: string;
+            objectKey?: string;
+            publicUrl?: string;
+        };
+        StorageDownloadUrlResponse: {
+            objectKey?: string;
+            downloadUrl?: string;
+            expiresInSeconds?: number;
+        };
+        VoidOrderPenaltyRequest: {
+            reason: string;
         };
         CreateOrderPenaltyRequest: {
             /** Format: uuid */
@@ -3071,15 +3241,19 @@ export interface components {
                 /** Format: date-time */
                 to?: string | null;
             };
+            /** @description Hanya denda berstatus RECORDED yang masuk count/totalAmount. */
             penalties?: {
                 count?: number;
                 totalAmount?: string;
+                /** @description Jumlah denda yang dibatalkan pada rentang yang sama. */
+                voidedCount?: number;
             };
             inspections?: {
                 DRAFT?: number;
                 SUBMITTED?: number;
                 APPROVED?: number;
                 REJECTED?: number;
+                DISPUTED?: number;
             };
             severity?: {
                 MINOR?: components["schemas"]["DamageSeverityStat"];
@@ -3089,6 +3263,8 @@ export interface components {
             topProducts?: {
                 /** Format: uuid */
                 productId?: string;
+                /** @description Nama produk saat laporan dibaca; null bila produk sudah dihapus. */
+                productName?: string | null;
                 lines?: number;
                 quantity?: number;
                 suggestedAmount?: string;
@@ -3159,8 +3335,11 @@ export interface components {
             orderId?: string;
             /** Format: uuid */
             returnRecordId?: string | null;
-            /** @enum {string} */
-            status?: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED";
+            /**
+             * @description DISPUTED = penyewa menyanggah; denda belum bisa ditagihkan.
+             * @enum {string}
+             */
+            status?: "DRAFT" | "SUBMITTED" | "APPROVED" | "REJECTED" | "DISPUTED";
             /** Format: uuid */
             inspectedByUserId?: string | null;
             /** Format: uuid */
@@ -3168,6 +3347,17 @@ export interface components {
             summary?: string | null;
             /** @description IDR rupiah utuh (BigInt sebagai string); null jika belum diputuskan */
             penaltyAmount?: string | null;
+            /** @description Alasan sanggahan penyewa dari portal. */
+            disputeReason?: string | null;
+            /** Format: date-time */
+            disputedAt?: string | null;
+            /**
+             * @description Hasil keputusan ulang terakhir; null selama sengketa berjalan.
+             * @enum {string|null}
+             */
+            disputeResolution?: "UPHELD" | "REVISED" | null;
+            /** Format: date-time */
+            disputeResolvedAt?: string | null;
             /**
              * @description Tingkat kerusakan yang dilaporkan petugas.
              * @enum {string|null}
@@ -4111,12 +4301,46 @@ export interface components {
             summary?: components["schemas"]["PublicPortalSummary"];
             /** @description Metode yang aktif untuk konteks NEW_BOOKING. */
             paymentMethods?: ("CASH" | "BANK_TRANSFER" | "QRIS")[];
+            inspection?: components["schemas"]["PortalInspectionSummary"];
             /** @description Toggle `rentalExtensionEnabled` tenant. `false` berarti pengajuan perpanjangan baru ditolak 422; riwayat di `extensions` tetap ditampilkan. */
             extensionsEnabled?: boolean;
             /** @description Riwayat pengajuan perpanjangan pesanan ini, terbaru lebih dulu (maks 10). Kosong bila pesanan belum dibuat. */
             extensions?: components["schemas"]["PortalExtensionSummary"][];
             /** Format: date-time */
             portalExpiresAt?: string;
+        };
+        /** @description Hasil inspeksi terakhir yang diputuskan (APPROVED) atau sedang disanggah (DISPUTED). Draft internal tidak pernah tampil ke portal. */
+        PortalInspectionSummary: {
+            /** Format: uuid */
+            id?: string;
+            /** @enum {string} */
+            status?: "APPROVED" | "DISPUTED";
+            penaltyAmount?: string;
+            summary?: string | null;
+            disputeReason?: string | null;
+            /** Format: date-time */
+            disputedAt?: string | null;
+            /** @description True hanya saat status APPROVED dan sengketa belum diajukan. */
+            canDispute?: boolean;
+        };
+        PortalInspectionDisputeRequest: {
+            reason: string;
+        };
+        PortalInspectionDisputeResult: {
+            /** @enum {string} */
+            status?: "DISPUTED";
+            /** Format: date-time */
+            disputedAt?: string | null;
+            reason?: string | null;
+        };
+        ResolveInspectionDisputeRequest: {
+            /**
+             * @description UPHELD mempertahankan nominal; REVISED mewajibkan penaltyAmount.
+             * @enum {string}
+             */
+            decision: "UPHELD" | "REVISED";
+            penaltyAmount?: number;
+            note?: string;
         };
         /** @description Ringkasan permintaan perpanjangan untuk portal tamu. Tidak memuat id staf/keputusan internal. */
         PortalExtensionSummary: {
@@ -4787,6 +5011,48 @@ export interface operations {
                 };
             };
             404: components["responses"]["NotFound"];
+            429: components["responses"]["RateLimited"];
+        };
+    };
+    disputePortalInspection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Token portal pesanan (base64url, 20-128 karakter). */
+                token: components["parameters"]["portalToken"];
+                inspectionId: components["parameters"]["inspectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PortalInspectionDisputeRequest"];
+            };
+        };
+        responses: {
+            /** @description Sengketa tercatat */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["PortalInspectionDisputeResult"];
+                    };
+                };
+            };
+            400: components["responses"]["ValidationError"];
+            404: components["responses"]["NotFound"];
+            /** @description Inspeksi belum disetujui sehingga tidak bisa disanggah */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
             429: components["responses"]["RateLimited"];
         };
     };
@@ -8964,6 +9230,161 @@ export interface operations {
             };
         };
     };
+    voidOrderPenalty: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["csrfToken"];
+            };
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+                orderId: components["parameters"]["orderId"];
+                penaltyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoidOrderPenaltyRequest"];
+            };
+        };
+        responses: {
+            /** @description Denda dibatalkan (atau sudah dibatalkan sebelumnya) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["OrderPenaltyResponse"];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    resolveInspectionDispute: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["csrfToken"];
+            };
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+                inspectionId: components["parameters"]["inspectionId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveInspectionDisputeRequest"];
+            };
+        };
+        responses: {
+            /** @description Inspeksi kembali APPROVED dengan hasil keputusan ulang */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["InspectionResponse"];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Inspeksi tidak berstatus DISPUTED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Nominal berbeda dari tagihan yang sudah tercatat */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
+        };
+    };
+    requestStorageUploadUrl: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["csrfToken"];
+            };
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RequestStorageUploadUrl"];
+            };
+        };
+        responses: {
+            /** @description URL upload dan kunci objek */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["StorageUploadUrlResponse"];
+                    };
+                };
+            };
+            /** @description Kategori/tipe file tidak diizinkan */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    requestStorageDownloadUrl: {
+        parameters: {
+            query: {
+                objectKey: string;
+            };
+            header?: never;
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description URL unduh bertanda tangan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["StorageDownloadUrlResponse"];
+                    };
+                };
+            };
+            /** @description objectKey di luar namespace tenant */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            403: components["responses"]["Forbidden"];
+        };
+    };
     listDamageFeeRevisions: {
         parameters: {
             query?: never;
@@ -8987,6 +9408,44 @@ export interface operations {
                 };
             };
             403: components["responses"]["Forbidden"];
+        };
+    };
+    restoreDamageFeeRevision: {
+        parameters: {
+            query?: never;
+            header: {
+                "X-CSRF-Token": components["parameters"]["csrfToken"];
+            };
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+                revisionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revisi baru hasil pemulihan */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["DamageFeeRevisionResponse"];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            /** @description Snapshot revisi tidak lagi valid */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorBody"];
+                };
+            };
         };
     };
     listDamageFeeCategoryAmounts: {
@@ -9115,14 +9574,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": {
-                    objectKey: string;
-                    /** @default image/jpeg */
-                    mimeType?: string;
-                    altText?: string;
-                    /** @default 0 */
-                    sortOrder?: number;
-                };
+                "application/json": components["schemas"]["CreateInspectionAttachmentRequest"];
             };
         };
         responses: {

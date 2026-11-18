@@ -55,6 +55,7 @@ const INSPECTION: Record<string, StatusDescriptor> = {
   SUBMITTED: { label: "Diajukan", tone: "warning" },
   APPROVED: { label: "Disetujui", tone: "success" },
   REJECTED: { label: "Ditolak", tone: "danger" },
+  DISPUTED: { label: "Sengketa", tone: "warning" },
 };
 
 const EXTENSION: Record<string, StatusDescriptor> = {

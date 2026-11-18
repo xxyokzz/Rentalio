@@ -335,6 +335,9 @@ components:
         damageFeeMaxAmount:
           type: [ string, 'null' ]
           description: Plafon usulan denda kondisi per inspeksi; null berarti tanpa plafon.
+        damagePenaltyOrderMaxAmount:
+          type: [ string, 'null' ]
+          description: Batas total denda aktif per order; null berarti tanpa batas.
         activatedAt:
           type: string
           format: date-time
@@ -502,6 +505,10 @@ components:
           type: [ integer, 'null' ]
           minimum: 1
           description: Plafon total usulan denda kondisi; null menghapus plafon.
+        damagePenaltyOrderMaxAmount:
+          type: [ integer, 'null' ]
+          minimum: 1
+          description: Batas total denda aktif per order; null menghapus batas.
 
     InviteMemberRequest:
       type: object
@@ -1162,6 +1169,20 @@ components:
             SEVERE:
               type: string
 
+    CreateInspectionAttachmentRequest:
+      type: object
+      required: [ objectKey ]
+      properties:
+        objectKey: { type: string, maxLength: 500 }
+        mimeType: { type: string, default: image/jpeg }
+        altText: { type: string, maxLength: 300 }
+        sortOrder: { type: integer, minimum: 0, default: 0 }
+        fileSizeBytes:
+          type: integer
+          minimum: 1
+          maximum: 10485760
+          description: Ukuran objek hasil upload; server menolak di atas 10 MB.
+
     InspectionItemInput:
       type: object
       required: [ productId, severity ]
@@ -1223,8 +1244,47 @@ components:
         amount: { type: string }
         currency: { type: string, enum: [ IDR ] }
         reason: { type: string }
+        status:
+          type: string
+          enum: [ RECORDED, VOIDED ]
+          description: VOIDED tidak dihitung dalam penaltyTotalAmount/amountDue.
+        voidedAt:
+          type: [ string, 'null' ]
+          format: date-time
+        voidedReason:
+          type: [ string, 'null' ]
         createdByUserId: { type: string, format: uuid }
         createdAt: { type: string, format: date-time }
+
+    RequestStorageUploadUrl:
+      type: object
+      required: [ category, filename, contentType ]
+      properties:
+        category:
+          type: string
+          enum: [ branding, products, receipts, inspections, general ]
+        filename: { type: string, maxLength: 255 }
+        contentType: { type: string, maxLength: 100 }
+
+    StorageUploadUrlResponse:
+      type: object
+      properties:
+        uploadUrl: { type: string }
+        objectKey: { type: string }
+        publicUrl: { type: string }
+
+    StorageDownloadUrlResponse:
+      type: object
+      properties:
+        objectKey: { type: string }
+        downloadUrl: { type: string }
+        expiresInSeconds: { type: integer }
+
+    VoidOrderPenaltyRequest:
+      type: object
+      required: [ reason ]
+      properties:
+        reason: { type: string, minLength: 3, maxLength: 500 }
 
     CreateOrderPenaltyRequest:
       type: object
@@ -1274,9 +1334,13 @@ components:
             to: { type: [ string, 'null' ], format: date-time }
         penalties:
           type: object
+          description: Hanya denda berstatus RECORDED yang masuk count/totalAmount.
           properties:
             count: { type: integer }
             totalAmount: { type: string }
+            voidedCount:
+              type: integer
+              description: Jumlah denda yang dibatalkan pada rentang yang sama.
         inspections:
           type: object
           properties:
@@ -1284,6 +1348,7 @@ components:
             SUBMITTED: { type: integer }
             APPROVED: { type: integer }
             REJECTED: { type: integer }
+            DISPUTED: { type: integer }
         severity:
           type: object
           properties:
@@ -1296,6 +1361,9 @@ components:
             type: object
             properties:
               productId: { type: string, format: uuid }
+              productName:
+                type: [ string, 'null' ]
+                description: Nama produk saat laporan dibaca; null bila produk sudah dihapus.
               lines: { type: integer }
               quantity: { type: integer }
               suggestedAmount: { type: string }
@@ -1420,7 +1488,8 @@ components:
           format: uuid
         status:
           type: string
-          enum: [ DRAFT, SUBMITTED, APPROVED, REJECTED ]
+          enum: [ DRAFT, SUBMITTED, APPROVED, REJECTED, DISPUTED ]
+          description: DISPUTED = penyewa menyanggah; denda belum bisa ditagihkan.
         inspectedByUserId:
           type: [ string, 'null' ]
           format: uuid
@@ -1432,6 +1501,19 @@ components:
         penaltyAmount:
           type: [ string, 'null' ]
           description: IDR rupiah utuh (BigInt sebagai string); null jika belum diputuskan
+        disputeReason:
+          type: [ string, 'null' ]
+          description: Alasan sanggahan penyewa dari portal.
+        disputedAt:
+          type: [ string, 'null' ]
+          format: date-time
+        disputeResolution:
+          type: [ string, 'null' ]
+          enum: [ UPHELD, REVISED, null ]
+          description: Hasil keputusan ulang terakhir; null selama sengketa berjalan.
+        disputeResolvedAt:
+          type: [ string, 'null' ]
+          format: date-time
         severity:
           type: [ string, 'null' ]
           enum: [ MINOR, MODERATE, SEVERE, null ]
@@ -2658,6 +2740,9 @@ components:
           items:
             type: string
             enum: [ CASH, BANK_TRANSFER, QRIS ]
+        inspection:
+          $ref: '#/components/schemas/PortalInspectionSummary'
+          nullable: true
         extensionsEnabled:
           type: boolean
           description: >-
@@ -2668,6 +2753,50 @@ components:
             Riwayat pengajuan perpanjangan pesanan ini, terbaru lebih dulu (maks 10). Kosong bila pesanan belum dibuat.
           items: { $ref: '#/components/schemas/PortalExtensionSummary' }
         portalExpiresAt: { type: string, format: date-time }
+
+    PortalInspectionSummary:
+      type: object
+      description: >-
+        Hasil inspeksi terakhir yang diputuskan (APPROVED) atau sedang disanggah
+        (DISPUTED). Draft internal tidak pernah tampil ke portal.
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [ APPROVED, DISPUTED ] }
+        penaltyAmount: { type: string }
+        summary: { type: [ string, 'null' ] }
+        disputeReason: { type: [ string, 'null' ] }
+        disputedAt:
+          type: [ string, 'null' ]
+          format: date-time
+        canDispute:
+          type: boolean
+          description: True hanya saat status APPROVED dan sengketa belum diajukan.
+
+    PortalInspectionDisputeRequest:
+      type: object
+      required: [ reason ]
+      properties:
+        reason: { type: string, minLength: 5, maxLength: 500 }
+
+    PortalInspectionDisputeResult:
+      type: object
+      properties:
+        status: { type: string, enum: [ DISPUTED ] }
+        disputedAt:
+          type: [ string, 'null' ]
+          format: date-time
+        reason: { type: [ string, 'null' ] }
+
+    ResolveInspectionDisputeRequest:
+      type: object
+      required: [ decision ]
+      properties:
+        decision:
+          type: string
+          enum: [ UPHELD, REVISED ]
+          description: UPHELD mempertahankan nominal; REVISED mewajibkan penaltyAmount.
+        penaltyAmount: { type: integer, minimum: 0 }
+        note: { type: string, maxLength: 500 }
 
     PortalExtensionSummary:
       type: object
@@ -3802,6 +3931,44 @@ paths:
           $ref: '#/components/responses/NotFound'
         '429':
           $ref: '#/components/responses/RateLimited'
+
+  /portal/orders/{token}/inspections/{inspectionId}/dispute:
+    x-implementation-status: implemented
+    post:
+      tags: [ Portal ]
+      operationId: disputePortalInspection
+      x-required-permission: public
+      summary: Sanggah hasil inspeksi lewat token pesanan
+      description: >-
+        Hanya inspeksi APPROVED milik pesanan token ini yang dapat disanggah.
+        Status menjadi DISPUTED sehingga denda tidak bisa ditagihkan sampai
+        owner/manager memutuskan ulang. Permintaan ulang bersifat idempoten.
+      parameters:
+        - $ref: '#/components/parameters/portalToken'
+        - $ref: '#/components/parameters/inspectionId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PortalInspectionDisputeRequest' }
+      responses:
+        '201':
+          description: Sengketa tercatat
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/PortalInspectionDisputeResult'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: Inspeksi belum disetujui sehingga tidak bisa disanggah
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorBody' }
+        '429': { $ref: '#/components/responses/RateLimited' }
 
   /portal/orders/{token}/extensions:
     x-implementation-status: implemented
@@ -8043,6 +8210,165 @@ paths:
         '409': { description: Inspeksi belum diputuskan (INVALID_STATE_TRANSITION) }
         '422': { description: Inspeksi tanpa denda yang bisa ditagihkan }
 
+  /tenants/{tenantId}/orders/{orderId}/penalties/{penaltyId}/void:
+    x-implementation-status: implemented
+    post:
+      tags: [ Order ]
+      operationId: voidOrderPenalty
+      x-required-permission: order.return
+      summary: Batalkan denda order yang salah tagih
+      description: |
+        Menandai denda VOIDED beserta alasan dan aktor; baris tidak dihapus dan
+        tetap muncul di riwayat order. `amountDue` dan `penaltyTotalAmount`
+        menghitung ulang tanpa denda ini. Permintaan kedua bersifat idempoten.
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+        - $ref: '#/components/parameters/orderId'
+        - name: penaltyId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/csrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VoidOrderPenaltyRequest'
+      responses:
+        '200':
+          description: Denda dibatalkan (atau sudah dibatalkan sebelumnya)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/OrderPenaltyResponse'
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /tenants/{tenantId}/inspections/{inspectionId}/dispute/resolve:
+    x-implementation-status: implemented
+    post:
+      tags: [ Return & Inspection ]
+      operationId: resolveInspectionDispute
+      x-required-permission: order.inspect
+      summary: Putuskan ulang sengketa penyewa (DISPUTED → APPROVED)
+      description: |
+        UPHELD mempertahankan nominal denda; REVISED mewajibkan `penaltyAmount`
+        baru. Bila denda sudah tercatat sebagai tagihan dengan nominal berbeda,
+        permintaan ditolak 422 — batalkan tagihan lebih dulu agar ledger konsisten.
+        Sengketa hanya bisa diputuskan saat inspeksi berstatus DISPUTED.
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+        - $ref: '#/components/parameters/inspectionId'
+        - $ref: '#/components/parameters/csrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveInspectionDisputeRequest'
+      responses:
+        '200':
+          description: Inspeksi kembali APPROVED dengan hasil keputusan ulang
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/InspectionResponse'
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Inspeksi tidak berstatus DISPUTED }
+        '422':
+          description: Nominal berbeda dari tagihan yang sudah tercatat
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorBody' }
+
+  /tenants/{tenantId}/storage/upload-url:
+    x-implementation-status: implemented
+    post:
+      tags: [ storage ]
+      operationId: requestStorageUploadUrl
+      x-required-permission: membership
+      x-required-roles:
+        - OWNER
+        - MANAGER
+        - STAFF
+      summary: Minta presigned URL upload terisolasi tenant
+      description: |
+        Kunci objek dibuat server sebagai `tenants/{tenantId}/{category}/{uuid}.{ext}`.
+        Kategori `inspections` hanya menerima JPEG/PNG/WebP/PDF dan maksimal
+        10 MB (divalidasi juga saat metadata lampiran didaftarkan).
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+        - $ref: '#/components/parameters/csrfToken'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RequestStorageUploadUrl'
+      responses:
+        '200':
+          description: URL upload dan kunci objek
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StorageUploadUrlResponse'
+        '400': { description: Kategori/tipe file tidak diizinkan }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /tenants/{tenantId}/storage/download-url:
+    x-implementation-status: implemented
+    get:
+      tags: [ storage ]
+      operationId: requestStorageDownloadUrl
+      x-required-permission: membership
+      x-required-roles:
+        - OWNER
+        - MANAGER
+        - STAFF
+        - CASHIER
+      summary: Minta presigned URL unduh berumur pendek
+      description: |
+        `objectKey` wajib berprefix `tenants/{tenantId}/`. Tautan berlaku 300
+        detik, sehingga bukti inspeksi tidak dapat dibagikan lewat URL publik
+        permanen.
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+        - name: objectKey
+          in: query
+          required: true
+          schema: { type: string, maxLength: 500 }
+      responses:
+        '200':
+          description: URL unduh bertanda tangan
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/StorageDownloadUrlResponse'
+        '400': { description: objectKey di luar namespace tenant }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
   /tenants/{tenantId}/damage-fee-revisions:
     x-implementation-status: implemented
     get:
@@ -8072,6 +8398,48 @@ paths:
                     items:
                       $ref: '#/components/schemas/DamageFeeRevisionResponse'
         '403': { $ref: '#/components/responses/Forbidden' }
+
+  /tenants/{tenantId}/damage-fee-revisions/{revisionId}/restore:
+    x-implementation-status: implemented
+    post:
+      tags: [ tenants ]
+      operationId: restoreDamageFeeRevision
+      x-required-permission: membership
+      x-required-roles:
+        - OWNER
+      summary: Kembalikan kebijakan denda ke revisi lama (OWNER)
+      description: >-
+        Menulis ulang pengaturan inspeksi/plafon/nominal denda dari snapshot
+        revisi, lalu menyimpan revisi baru sehingga riwayat tetap append-only.
+        Revisi tidak dihapus. Batas total denda per order tidak termasuk snapshot
+        sehingga tidak berubah. 422 bila snapshot lama tidak lagi valid (denda
+        aktif tanpa inspeksi atau tanpa nominal).
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+        - name: revisionId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/csrfToken'
+      responses:
+        '200':
+          description: Revisi baru hasil pemulihan
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/DamageFeeRevisionResponse'
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: Snapshot revisi tidak lagi valid
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorBody' }
 
   /tenants/{tenantId}/damage-fee-categories:
     x-implementation-status: implemented
@@ -8224,22 +8592,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required: [ objectKey ]
-              properties:
-                objectKey:
-                  type: string
-                  maxLength: 500
-                mimeType:
-                  type: string
-                  default: image/jpeg
-                altText:
-                  type: string
-                  maxLength: 300
-                sortOrder:
-                  type: integer
-                  minimum: 0
-                  default: 0
+              $ref: '#/components/schemas/CreateInspectionAttachmentRequest'
       responses:
         '201':
           description: Lampiran terdaftar
