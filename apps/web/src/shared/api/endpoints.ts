@@ -124,6 +124,12 @@ export const tenantApi = {
 
 /** Laporan operasional tenant. */
 export const reportApi = {
+  /** Piutang & denda belum lunas menurut umur; `alertCount` untuk badge. */
+  receivableAging: (tenantId: string) =>
+    apiRequest<Schema<"ReceivableAgingResponse">>(
+      `/tenants/${tenantId}/reports/receivable-aging`,
+    ),
+
   damageFees: (tenantId: string, params?: { from?: string; to?: string }) => {
     const search = new URLSearchParams();
     if (params?.from) search.set("from", params.from);

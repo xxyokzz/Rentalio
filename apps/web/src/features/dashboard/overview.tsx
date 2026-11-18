@@ -10,6 +10,7 @@ import {
   type Schema,
 } from "@/shared/api/endpoints";
 import { loadConflictOverview } from "@/features/conflicts/conflict-overview-cache";
+import { loadReceivableAging } from "@/features/reports/receivable-aging-cache";
 import { useSession } from "@/shared/auth/session";
 import { formatIDR } from "@/shared/format/currency";
 import { formatDateRange } from "@/shared/format/date";
@@ -25,6 +26,7 @@ interface OverviewData {
   orders: Schema<"OrderResponse">[];
   products: Schema<"ProductResponse">[];
   openConflicts: number | null;
+  aging: Schema<"ReceivableAgingResponse"> | null;
 }
 
 interface QueueEntry {
@@ -76,19 +78,23 @@ export function DashboardOverview() {
   const state = useApi<OverviewData>(
     tenantId
       ? async () => {
-          const [reservations, orders, products, conflicts] = await Promise.all([
+          const [reservations, orders, products, conflicts, aging] = await Promise.all([
             reservationApi.list(tenantId),
             orderApi.list(tenantId, { pageSize: 100 }),
             catalogApi.listProducts(tenantId),
             // Cache singkat yang sama dipakai badge dan halaman konflik, jadi
             // membuka Ringkasan tidak menambah request ringkasan kedua.
             loadConflictOverview(tenantId, "OPEN").catch(() => null),
+            // Cache singkat yang sama dipakai badge; gagal baca tidak memblokir
+            // ringkasan operasional.
+            loadReceivableAging(tenantId).catch(() => null),
           ]);
           return {
             reservations,
             orders: orders.data,
             products,
             openConflicts: conflicts?.summary?.openConflicts ?? null,
+            aging,
           };
         }
       : null,
@@ -163,7 +169,8 @@ export function DashboardOverview() {
     (metrics?.pending.length ?? 0) +
     (metrics?.ready.length ?? 0) +
     (metrics?.outstanding.length ?? 0) +
-    (state.data?.openConflicts ?? 0);
+    (state.data?.openConflicts ?? 0) +
+    (state.data?.aging?.alertCount ?? 0);
 
   return (
     <div className="page">
@@ -401,6 +408,29 @@ export function DashboardOverview() {
                           </span>
                           <span className="badge badge-warning">
                             {formatIDR(metrics?.outstandingTotal)}
+                          </span>
+                        </Link>
+                      ) : null}
+                      {(data.aging?.outstanding?.overdueOrders ?? 0) > 0 ? (
+                        <Link className="rail-item" href="/app/reports/damage-fees">
+                          <Icon name="wallet" size={16} />
+                          <span>
+                            <b>{data.aging?.outstanding?.overdueOrders}</b> tagihan menua &gt;{" "}
+                            {data.aging?.thresholds?.invoiceDays} hari
+                          </span>
+                          <span className="badge badge-warning">
+                            {formatIDR(data.aging?.outstanding?.overdueAmount)}
+                          </span>
+                        </Link>
+                      ) : null}
+                      {(data.aging?.penalties?.agedOrders ?? 0) > 0 ? (
+                        <Link className="rail-item" href="/app/reports/damage-fees">
+                          <Icon name="alert" size={16} />
+                          <span>
+                            <b>{data.aging?.penalties?.agedOrders}</b> denda menggantung
+                          </span>
+                          <span className="badge badge-warning">
+                            {formatIDR(data.aging?.penalties?.agedAmount)}
                           </span>
                         </Link>
                       ) : null}

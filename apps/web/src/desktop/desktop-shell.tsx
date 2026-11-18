@@ -8,6 +8,7 @@ import { canManageMembers, type Role } from "@/shared/auth/permissions";
 import { visibleNavGroups } from "@/shared/config/navigation";
 import { useOpenConflictCount } from "@/features/conflicts/open-conflict-count";
 import { usePendingExtensionCount } from "@/features/orders/pending-extension-count";
+import { useReceivableAlertCount } from "@/features/reports/receivable-alert-count";
 import { NavCountBadge } from "@/shared/ui/nav-badge";
 import { RestrictedBanner, useTenantStatusBadge } from "@/features/subscription/restricted-banner";
 import { TenantSwitcher } from "@/shared/layout/tenant-switcher";
@@ -39,6 +40,7 @@ export function DesktopShell({ children }: { children: ReactNode }) {
   const groups = visibleNavGroups(role as Role | undefined);
   const pendingExtensionCount = usePendingExtensionCount();
   const openConflictCount = useOpenConflictCount();
+  const receivableAlertCount = useReceivableAlertCount();
 
   const activeGroup = groups.find((group) =>
     group.items.some((item) => isActive(pathname, item.href)),
@@ -115,6 +117,12 @@ export function DesktopShell({ children }: { children: ReactNode }) {
                         count={openConflictCount}
                         tone="danger"
                         label="konflik perpanjangan belum diselesaikan"
+                      />
+                    ) : null}
+                    {item.href === "/app/reports/damage-fees" ? (
+                      <NavCountBadge
+                        count={receivableAlertCount}
+                        label="tagihan menua atau denda menggantung"
                       />
                     ) : null}
                     {active ? <span className="nav-active-dot" aria-hidden="true" /> : null}

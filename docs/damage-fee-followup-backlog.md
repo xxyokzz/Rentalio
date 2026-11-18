@@ -13,7 +13,7 @@ setelah kode, test, dan pemeriksaan (typecheck/lint/test) lulus.
 | 5 | Alur sengketa penyewa (`DISPUTED`) | tinggi | besar | **selesai** |
 | 6 | Halaman laporan denda (`reports/damage-fees`) + ekspor CSV | tinggi | sedang | **selesai** |
 | 7 | UI riwayat kebijakan denda + bandingkan/kembalikan revisi | menengah-tinggi | sedang | **selesai** |
-| 8 | Notifikasi/badge denda menggantung dan tagihan menua | menengah | kecil-sedang | belum |
+| 8 | Notifikasi/badge denda menggantung dan tagihan menua | menengah | kecil-sedang | **selesai** |
 | 9 | Simulator nominal denda di layar pengaturan | menengah | kecil | belum |
 | 10 | Simpan nama kategori di snapshot (bukan hanya id) | menengah | kecil | belum |
 | 11 | Plafon per item dan lampiran per item | menengah | sedang | belum |
@@ -84,6 +84,19 @@ setelah kode, test, dan pemeriksaan (typecheck/lint/test) lulus.
   termasuk snapshot sehingga tidak berubah; UI menyatakannya. Form pengaturan
   memuat ulang tenant dan membuang draft lama setelah pemulihan. Test: 2
   integrasi (pemulihan + isolasi tenant) + 3 komponen web.
+
+- **#8** — `GET /tenants/{t}/reports/receivable-aging` (report.read) menghitung
+  sisa tagihan per pesanan (sewa + denda RECORDED − pembayaran RECORDED),
+  mengabaikan pesanan lunas/CANCELLED, lalu mengelompokkan umur ke `0-7`, `8-14`,
+  `15-30`, `31+`. Ambang: tagihan menua > 14 hari, denda menggantung > 7 hari.
+  `alertCount` memakai himpunan pesanan sehingga pesanan yang tagihan dan
+  dendanya sama-sama menua hanya dihitung sekali. Badge menu "Laporan denda"
+  (desktop/mobile) dan Ringkasan memakai cache singkat 30 detik dengan
+  penggabungan request bersamaan (`receivable-aging-cache`), jadi navigasi
+  tidak memicu pemindaian berulang. Ringkasan menampilkan item "tagihan menua"
+  dan "denda menggantung" beserta nominal; halaman laporan denda menampilkan
+  panel "Umur piutang". Test: 1 integrasi (bucket, pengecualian lunas/CANCELLED,
+  ambang, dedupe alertCount) + 1 komponen + 3 unit cache.
 
 ## Catatan ketergantungan
 

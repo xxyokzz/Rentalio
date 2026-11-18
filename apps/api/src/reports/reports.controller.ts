@@ -21,6 +21,17 @@ interface AuthedRequest extends Request {
 export class ReportsController {
   constructor(private readonly reportsService: ReportsService) {}
 
+  @Get('receivable-aging')
+  @ApiOperation({
+    summary: 'Piutang dan denda belum lunas menurut umur (tagihan menua)',
+  })
+  async receivableAging(@Param('tenantId') tenantId: string, @Req() req: AuthedRequest) {
+    if (!req.session) throw new ApiError(ErrorCode.UNAUTHENTICATED, 'Autentikasi diperlukan.');
+    return {
+      data: await this.reportsService.receivableAging(tenantId, req.session.userId),
+    };
+  }
+
   @Get('damage-fees')
   @ApiOperation({ summary: 'Laporan denda kerusakan: tagihan, keputusan, dan tingkat kerusakan' })
   async damageFees(

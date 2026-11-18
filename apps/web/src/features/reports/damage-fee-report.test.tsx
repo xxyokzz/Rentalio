@@ -21,6 +21,31 @@ vi.mock("@/shared/api/endpoints", async (importOriginal) => {
         report.calls.push({ tenantId, params });
         return report.current;
       },
+      receivableAging: async () => ({
+        asOf: "2026-11-18T00:00:00.000Z",
+        thresholds: { invoiceDays: 14, penaltyDays: 7 },
+        outstanding: {
+          orders: 2,
+          amount: "1350000",
+          overdueOrders: 1,
+          overdueAmount: "1100000",
+          oldestDays: 20,
+        },
+        penalties: {
+          orders: 2,
+          amount: "150000",
+          agedOrders: 1,
+          agedAmount: "100000",
+          oldestDays: 10,
+        },
+        buckets: [
+          { key: "0-7", orders: 1, amount: "250000" },
+          { key: "8-14", orders: 0, amount: "0" },
+          { key: "15-30", orders: 1, amount: "1100000" },
+          { key: "31+", orders: 0, amount: "0" },
+        ],
+        alertCount: 2,
+      }),
     },
   };
 });
@@ -68,10 +93,13 @@ describe("DamageFeeReportPage", () => {
     report.current = sample();
     render(<DamageFeeReportPage />);
 
-    expect(await screen.findByText(/Rp\s?250\.000/)).toBeTruthy();
+    expect(await screen.findByText("Denda dibatalkan")).toBeTruthy();
     expect(screen.getByText("Laporan denda kerusakan")).toBeTruthy();
-    expect(screen.getByText("Denda dibatalkan")).toBeTruthy();
+    expect(screen.getAllByText(/Rp\s?250\.000/).length).toBeGreaterThan(0);
     expect(screen.getByText("Kamera Sony")).toBeTruthy();
+    // Panel umur piutang memakai ambang dari server.
+    expect(await screen.findByText(/Tagihan menua > 14 hari/)).toBeTruthy();
+    expect(screen.getByText(/Denda menggantung > 7 hari/)).toBeTruthy();
     // Satu baris status DISPUTED dirender oleh peta status.
     expect(screen.getByText("Sengketa")).toBeTruthy();
   });
@@ -85,8 +113,9 @@ describe("DamageFeeReportPage", () => {
 
     render(<DamageFeeReportPage />);
     // Tunggu data siap: tombol ekspor nonaktif selama laporan masih dimuat.
-    await screen.findByText(/Rp\s?250\.000/);
-    fireEvent.click(screen.getByRole("button", { name: "Ekspor CSV" }));
+    const exportButton = await screen.findByRole("button", { name: "Ekspor CSV" });
+    await waitFor(() => expect(exportButton.hasAttribute("disabled")).toBe(false));
+    fireEvent.click(exportButton);
 
     expect(createObjectURL).toHaveBeenCalled();
     const blob = createObjectURL.mock.calls[0]![0];

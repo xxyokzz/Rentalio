@@ -7,6 +7,7 @@ import { formatIDR } from "@/shared/format/currency";
 import { DEFAULT_TIMEZONE, zonedDateEndIso, zonedDateStartIso } from "@/shared/format/date";
 import { inspectionStatus } from "@/shared/format/status";
 import { useApi } from "@/shared/hooks/useApi";
+import { loadReceivableAging } from "./receivable-aging-cache";
 import { Button } from "@/shared/ui/buttons";
 import { TextInput } from "@/shared/ui/form";
 import { Badge, PageHeader, Panel, PanelBody, PanelHead, Stat, StatusBadge } from "@/shared/ui/surfaces";
@@ -49,6 +50,11 @@ export function DamageFeeReportPage() {
     [tenantId, from, to, timezone],
   );
 
+  const agingState = useApi(
+    tenantId ? () => loadReceivableAging(tenantId) : null,
+    [tenantId],
+  );
+  const aging = agingState.data ?? null;
   const report: Report | null = state.data ?? null;
   const inspectionTotal = useMemo(() => {
     if (!report) return 0;
@@ -163,6 +169,62 @@ export function DamageFeeReportPage() {
                   note="Menunggu keputusan ulang"
                 />
               </div>
+
+              <Panel flush>
+                <PanelHead
+                  title="Umur piutang"
+                  description="Sisa tagihan (sewa + denda tercatat) menurut umur pesanan, dihitung server."
+                />
+                <div className="table-wrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        <th scope="col">Umur</th>
+                        <th scope="col" className="num">
+                          Pesanan
+                        </th>
+                        <th scope="col" className="num">
+                          Sisa tagihan
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(aging?.buckets ?? []).map((bucket) => (
+                        <tr key={bucket.key}>
+                          <td>{bucket.key} hari</td>
+                          <td className="num">{bucket.orders ?? 0}</td>
+                          <td className="num money">{formatIDR(bucket.amount ?? null)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="panel-body stack-sm">
+                  <div className="row-between">
+                    <span className="text-sm">
+                      Tagihan menua &gt; {aging?.thresholds?.invoiceDays ?? 14} hari
+                    </span>
+                    <span className="money">
+                      {aging?.outstanding?.overdueOrders ?? 0} pesanan ·{" "}
+                      {formatIDR(aging?.outstanding?.overdueAmount ?? null)}
+                    </span>
+                  </div>
+                  <div className="row-between">
+                    <span className="text-sm">
+                      Denda menggantung &gt; {aging?.thresholds?.penaltyDays ?? 7} hari
+                    </span>
+                    <span className="money">
+                      {aging?.penalties?.agedOrders ?? 0} pesanan ·{" "}
+                      {formatIDR(aging?.penalties?.agedAmount ?? null)}
+                    </span>
+                  </div>
+                  {agingState.error ? (
+                    <InlineAlert tone="warning">
+                      Ringkasan umur piutang tidak dapat dimuat; angka denda di atas tetap valid.
+                    </InlineAlert>
+                  ) : null}
+                </div>
+              </Panel>
 
               <div className="grid-2">
                 <Panel flush>

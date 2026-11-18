@@ -737,3 +737,172 @@ describe('Denda kerusakan — pesan WhatsApp', () => {
     expect(message.body.data.orderNumber).toBeTruthy();
   });
 });
+
+describe('Piutang menua dan denda menggantung', () => {
+  it('mengelompokkan sisa tagihan menurut umur dan mengabaikan lunas/CANCELLED', async () => {
+    const fx = await setupOrder('penaging');
+    const now = Date.now();
+    const daysAgo = (days: number) => new Date(now - days * 86_400_000);
+
+    const oldOrderId = await prisma.withTenant(fx.tenantId, async (tx) => {
+      const order = await tx.rentalOrder.create({
+        data: {
+          tenantId: fx.tenantId,
+          orderNumber: `ORD-AGING-${Date.now()}`,
+          status: 'CONFIRMED',
+          totalAmount: 1_000_000n,
+          createdAt: daysAgo(20),
+        },
+      });
+      const inspection = await tx.inspection.create({
+        data: {
+          tenantId: fx.tenantId,
+          orderId: order.id,
+          status: 'APPROVED',
+          penaltyAmount: 100_000n,
+          submittedAt: daysAgo(10),
+          decidedAt: daysAgo(10),
+        },
+      });
+      await tx.orderPenalty.create({
+        data: {
+          tenantId: fx.tenantId,
+          orderId: order.id,
+          inspectionId: inspection.id,
+          amount: 100_000n,
+          reason: 'Penyok lama',
+          createdByUserId: fx.userId,
+          createdAt: daysAgo(10),
+        },
+      });
+      return order.id;
+    });
+    expect(oldOrderId).toBeTruthy();
+
+    await prisma.withTenant(fx.tenantId, async (tx) => {
+      // Lunas: tidak masuk piutang meski umurnya tua.
+      const paid = await tx.rentalOrder.create({
+        data: {
+          tenantId: fx.tenantId,
+          orderNumber: `ORD-PAID-${Date.now()}`,
+          status: 'COMPLETED',
+          totalAmount: 300_000n,
+          createdAt: daysAgo(30),
+        },
+      });
+      await tx.payment.create({
+        data: {
+          tenantId: fx.tenantId,
+          orderId: paid.id,
+          amount: 300_000n,
+          method: 'CASH',
+          status: 'RECORDED',
+        },
+      });
+      // Dibatalkan: tidak pernah ditagihkan.
+      await tx.rentalOrder.create({
+        data: {
+          tenantId: fx.tenantId,
+          orderNumber: `ORD-CANCEL-${Date.now()}`,
+          status: 'CANCELLED',
+          totalAmount: 500_000n,
+          createdAt: daysAgo(40),
+        },
+      });
+      // Baru: denda belum menua.
+      const fresh = await tx.rentalOrder.create({
+        data: {
+          tenantId: fx.tenantId,
+          orderNumber: `ORD-FRESH-${Date.now()}`,
+          status: 'CONFIRMED',
+          totalAmount: 200_000n,
+        },
+      });
+      const inspection = await tx.inspection.create({
+        data: {
+          tenantId: fx.tenantId,
+          orderId: fresh.id,
+          status: 'APPROVED',
+          penaltyAmount: 50_000n,
+          submittedAt: new Date(),
+          decidedAt: new Date(),
+        },
+      });
+      await tx.orderPenalty.create({
+        data: {
+          tenantId: fx.tenantId,
+          orderId: fresh.id,
+          inspectionId: inspection.id,
+          amount: 50_000n,
+          reason: 'Lecet baru',
+          createdByUserId: fx.userId,
+        },
+      });
+
+      // Denda menua pada pesanan yang tagihannya belum menua: hanya denda yang
+      // memicu notifikasi untuk pesanan ini.
+      const penaltyOnly = await tx.rentalOrder.create({
+        data: {
+          tenantId: fx.tenantId,
+          orderNumber: `ORD-PENALTY-ONLY-${Date.now()}`,
+          status: 'CONFIRMED',
+          createdAt: daysAgo(10),
+        },
+      });
+      const penaltyOnlyInspection = await tx.inspection.create({
+        data: {
+          tenantId: fx.tenantId,
+          orderId: penaltyOnly.id,
+          status: 'APPROVED',
+          penaltyAmount: 100_000n,
+          submittedAt: daysAgo(10),
+          decidedAt: daysAgo(10),
+        },
+      });
+      await tx.orderPenalty.create({
+        data: {
+          tenantId: fx.tenantId,
+          orderId: penaltyOnly.id,
+          inspectionId: penaltyOnlyInspection.id,
+          amount: 100_000n,
+          reason: 'Denda menua tanpa tagihan sewa',
+          createdByUserId: fx.userId,
+          createdAt: daysAgo(10),
+        },
+      });
+    });
+
+    const aging = await auth(
+      request(server).get(`${base(fx.tenantId)}/reports/receivable-aging`),
+      fx,
+    );
+    expect(aging.status, JSON.stringify(aging.body)).toBe(200);
+    const data = aging.body.data;
+    expect(data.thresholds).toEqual({ invoiceDays: 14, penaltyDays: 7 });
+    expect(data.outstanding.orders).toBe(3);
+    expect(data.outstanding.amount).toBe('1450000');
+    expect(data.outstanding.overdueOrders).toBe(1);
+    expect(data.outstanding.overdueAmount).toBe('1100000');
+    expect(data.outstanding.oldestDays).toBeGreaterThanOrEqual(20);
+    expect(data.penalties.orders).toBe(3);
+    expect(data.penalties.amount).toBe('250000');
+    expect(data.penalties.agedOrders).toBe(2);
+    expect(data.penalties.agedAmount).toBe('200000');
+    expect(data.penalties.oldestDays).toBeGreaterThanOrEqual(10);
+    expect(data.buckets.find((b: { key: string }) => b.key === '0-7')).toMatchObject({
+      orders: 1,
+      amount: '250000',
+    });
+    expect(data.buckets.find((b: { key: string }) => b.key === '8-14')).toMatchObject({
+      orders: 1,
+      amount: '100000',
+    });
+    expect(data.buckets.find((b: { key: string }) => b.key === '15-30')).toMatchObject({
+      orders: 1,
+      amount: '1100000',
+    });
+    // Pesanan tua punya tagihan dan denda yang sama-sama menua, tetapi badge
+    // hanya menghitungnya sekali: 1 pesanan tua + 1 pesanan denda-saja.
+    expect(data.alertCount).toBe(2);
+  });
+});

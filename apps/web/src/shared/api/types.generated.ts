@@ -2066,6 +2066,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/tenants/{tenantId}/reports/receivable-aging": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Piutang dan denda belum lunas menurut umur
+         * @description Menghitung sisa tagihan per pesanan (sewa + denda RECORDED − pembayaran RECORDED) dan mengelompokkannya menurut umur. Pesanan CANCELLED dan pesanan lunas tidak dihitung. `alertCount` adalah pesanan dengan tagihan lebih tua dari `invoiceDays` atau denda lebih tua dari `penaltyDays`, dipakai badge notifikasi; satu pesanan dihitung sekali.
+         */
+        get: operations["getReceivableAging"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/tenants/{tenantId}/reports/damage-fees": {
         parameters: {
             query?: never;
@@ -3233,6 +3253,36 @@ export interface components {
             minorAmount?: number;
             moderateAmount?: number;
             severeAmount?: number;
+        };
+        ReceivableAgingResponse: {
+            /** Format: date-time */
+            asOf?: string;
+            thresholds?: {
+                invoiceDays?: number;
+                penaltyDays?: number;
+            };
+            outstanding?: {
+                orders?: number;
+                amount?: string;
+                overdueOrders?: number;
+                overdueAmount?: string;
+                oldestDays?: number;
+            };
+            penalties?: {
+                orders?: number;
+                amount?: string;
+                agedOrders?: number;
+                agedAmount?: string;
+                oldestDays?: number;
+            };
+            buckets?: {
+                /** @enum {string} */
+                key?: "0-7" | "8-14" | "15-30" | "31+";
+                orders?: number;
+                amount?: string;
+            }[];
+            /** @description Pesanan dengan tagihan atau denda yang sudah menua. */
+            alertCount?: number;
         };
         DamageFeeReportResponse: {
             range?: {
@@ -9503,6 +9553,31 @@ export interface operations {
             };
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    getReceivableAging: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                tenantId: components["parameters"]["tenantId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ringkasan umur piutang */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data?: components["schemas"]["ReceivableAgingResponse"];
+                    };
+                };
+            };
+            403: components["responses"]["Forbidden"];
         };
     };
     getDamageFeeReport: {

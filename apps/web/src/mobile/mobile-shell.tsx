@@ -7,6 +7,7 @@ import { useSession } from "@/shared/auth/session";
 import { visibleNavGroups } from "@/shared/config/navigation";
 import { useOpenConflictCount } from "@/features/conflicts/open-conflict-count";
 import { usePendingExtensionCount } from "@/features/orders/pending-extension-count";
+import { useReceivableAlertCount } from "@/features/reports/receivable-alert-count";
 import { NavCountBadge } from "@/shared/ui/nav-badge";
 import { RestrictedBanner } from "@/features/subscription/restricted-banner";
 import { Button } from "@/shared/ui/buttons";
@@ -46,6 +47,7 @@ export function MobileShell({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false);
   const groups = visibleNavGroups(role);
   const pendingExtensionCount = usePendingExtensionCount();
+  const receivableAlertCount = useReceivableAlertCount();
   const openConflictCount = useOpenConflictCount();
 
   useEffect(() => {
@@ -176,6 +178,13 @@ export function MobileShell({ children }: { children: ReactNode }) {
                       <NavCountBadge
                         count={pendingExtensionCount}
                         label="permintaan perpanjangan menunggu keputusan"
+                        inline
+                      />
+                    ) : null}
+                    {item.href === "/app/reports/damage-fees" ? (
+                      <NavCountBadge
+                        count={receivableAlertCount}
+                        label="tagihan menua atau denda menggantung"
                         inline
                       />
                     ) : null}

@@ -1324,6 +1324,43 @@ components:
         moderateAmount: { type: integer, minimum: 0 }
         severeAmount: { type: integer, minimum: 0 }
 
+    ReceivableAgingResponse:
+      type: object
+      properties:
+        asOf: { type: string, format: date-time }
+        thresholds:
+          type: object
+          properties:
+            invoiceDays: { type: integer }
+            penaltyDays: { type: integer }
+        outstanding:
+          type: object
+          properties:
+            orders: { type: integer }
+            amount: { type: string }
+            overdueOrders: { type: integer }
+            overdueAmount: { type: string }
+            oldestDays: { type: integer }
+        penalties:
+          type: object
+          properties:
+            orders: { type: integer }
+            amount: { type: string }
+            agedOrders: { type: integer }
+            agedAmount: { type: string }
+            oldestDays: { type: integer }
+        buckets:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string, enum: [ '0-7', '8-14', '15-30', '31+' ] }
+              orders: { type: integer }
+              amount: { type: string }
+        alertCount:
+          type: integer
+          description: Pesanan dengan tagihan atau denda yang sudah menua.
+
     DamageFeeReportResponse:
       type: object
       properties:
@@ -8500,6 +8537,35 @@ paths:
                     $ref: '#/components/schemas/DamageFeeCategoryAmountResponse'
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
+
+  /tenants/{tenantId}/reports/receivable-aging:
+    x-implementation-status: implemented
+    get:
+      tags: [ report ]
+      operationId: getReceivableAging
+      x-required-permission: report.read
+      summary: Piutang dan denda belum lunas menurut umur
+      description: >-
+        Menghitung sisa tagihan per pesanan (sewa + denda RECORDED − pembayaran
+        RECORDED) dan mengelompokkannya menurut umur. Pesanan CANCELLED dan
+        pesanan lunas tidak dihitung. `alertCount` adalah pesanan dengan tagihan
+        lebih tua dari `invoiceDays` atau denda lebih tua dari `penaltyDays`,
+        dipakai badge notifikasi; satu pesanan dihitung sekali.
+      security:
+        - cookieAuth: []
+      parameters:
+        - $ref: '#/components/parameters/tenantId'
+      responses:
+        '200':
+          description: Ringkasan umur piutang
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/ReceivableAgingResponse'
+        '403': { $ref: '#/components/responses/Forbidden' }
 
   /tenants/{tenantId}/reports/damage-fees:
     x-implementation-status: implemented
