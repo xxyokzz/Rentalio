@@ -21,6 +21,7 @@ import { CheckboxField, SelectInput, TextArea, TextInput } from "@/shared/ui/for
 import { useToast } from "@/shared/ui/overlays";
 import { DefinitionList, Panel, PageHeader, PanelBody, PanelHead, StatusBadge } from "@/shared/ui/surfaces";
 import { DamageFeeHistory } from "./damage-fee-history";
+import { DamageFeeSimulator } from "./damage-fee-simulator";
 import { subscriptionSummary } from "@/features/subscription/subscription-summary";
 import { subscriptionRequest } from "@/features/subscription/subscription-request";
 import { EmptyState, InlineAlert, LoadingBlock } from "@/shared/ui/states";
@@ -675,6 +676,21 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
                   }
                   hint="Opsional. Menolak pencatatan denda baru bila akumulasi denda aktif pada satu order melebihi batas ini."
                 />
+                <DamageFeeSimulator
+                  enabled={damageFeeEnabled}
+                  amounts={{
+                    minor: damageFeeMinorAmount,
+                    moderate: damageFeeModerateAmount,
+                    severe: damageFeeSevereAmount,
+                  }}
+                  maxAmount={damageFeeMaxAmount}
+                  categories={categories.map((category) => ({
+                    id: category.id ?? "",
+                    name: category.name ?? "Kategori",
+                  }))}
+                  categoryAmounts={categoryAmounts}
+                />
+
                 {damageFeeInvalid ? (
                   <InlineAlert tone="warning">
                     Isi minimal satu nominal lebih dari Rp0 dan aktifkan inspeksi sebelum denda kondisi
@@ -725,8 +741,9 @@ export function TenantSettings({ supportWhatsApp }: { supportWhatsApp: string })
                       <strong>Nominal denda per kategori produk</strong>
                     </p>
                     <p className="text-xs text-muted">
-                      Override ini dipakai menggantikan nominal umum saat inspeksi dibuat. Kosongkan
-                      (Rp0) untuk tetap memakai nominal umum.
+                      Nominal kategori yang sudah disimpan menggantikan nominal umum sepenuhnya,
+                      termasuk bila diisi Rp0: kategori itu tidak menghasilkan usulan. Hanya kategori
+                      yang belum pernah disimpan yang memakai nominal umum.
                     </p>
                   </div>
                   {categoryError ? <InlineAlert tone="warning">{categoryError}</InlineAlert> : null}

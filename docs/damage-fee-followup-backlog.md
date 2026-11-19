@@ -14,7 +14,7 @@ setelah kode, test, dan pemeriksaan (typecheck/lint/test) lulus.
 | 6 | Halaman laporan denda (`reports/damage-fees`) + ekspor CSV | tinggi | sedang | **selesai** |
 | 7 | UI riwayat kebijakan denda + bandingkan/kembalikan revisi | menengah-tinggi | sedang | **selesai** |
 | 8 | Notifikasi/badge denda menggantung dan tagihan menua | menengah | kecil-sedang | **selesai** |
-| 9 | Simulator nominal denda di layar pengaturan | menengah | kecil | belum |
+| 9 | Simulator nominal denda di layar pengaturan | menengah | kecil | **selesai** |
 | 10 | Simpan nama kategori di snapshot (bukan hanya id) | menengah | kecil | belum |
 | 11 | Plafon per item dan lampiran per item | menengah | sedang | belum |
 | 12 | Deductible/risiko sendiri tenant | menengah-tinggi | kecil | belum |
@@ -97,6 +97,18 @@ setelah kode, test, dan pemeriksaan (typecheck/lint/test) lulus.
   dan "denda menggantung" beserta nominal; halaman laporan denda menampilkan
   panel "Umur piutang". Test: 1 integrasi (bucket, pengecualian lunas/CANCELLED,
   ambang, dedupe alertCount) + 1 komponen + 3 unit cache.
+
+- **#9** — simulator "Simulator nominal denda" di panel Inspeksi & denda
+  kerusakan, dihitung dari nilai formulir yang belum tentu tersimpan. Pilih
+  kategori (umum atau override tersimpan), tingkat kondisi, dan jumlah item;
+  tampil nominal per tingkat, usulan sebelum/setelah plafon, penanda
+  dipotong plafon, serta penjelasan saat denda nonaktif atau nominal Rp0.
+  Aturannya menyalin `damage-fee.ts` server (override kategori menggantikan
+  nominal umum sepenuhnya, plafon memotong total); server tetap menghitung
+  ulang saat inspeksi dibuat. Keterangan Rp0 disamakan dengan perilaku server:
+  baris kategori tersimpan (walau Rp0) tetap berlaku penuh, bukan kembali ke
+  nominal umum — hint pengaturan yang lama menyatakan sebaliknya dan diperbaiki.
+  Test: 5 unit aturan hitung + 3 komponen.
 
 ## Catatan ketergantungan
 
