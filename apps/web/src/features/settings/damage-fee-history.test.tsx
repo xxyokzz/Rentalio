@@ -97,8 +97,9 @@ describe("DamageFeeHistory", () => {
 
     await waitFor(() => expect(onRestored).toHaveBeenCalled());
     expect(api.restore).toHaveBeenCalledWith("tenant-1", "rev-1");
-    // Riwayat dimuat ulang agar revisi baru langsung terlihat.
-    expect(api.list).toHaveBeenCalledTimes(2);
+    // Riwayat dimuat ulang agar revisi baru langsung terlihat. `reload()` baru
+    // menjadwalkan fetch pada render berikutnya, jadi tunggu pemanggilan kedua.
+    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
   });
 
   it("menyembunyikan aksi pemulihan untuk peran selain owner", async () => {
